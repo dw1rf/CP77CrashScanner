@@ -1,0 +1,10 @@
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+scanner_config.json
+*.rar
+*.zip
+*.dmp
+*.log
