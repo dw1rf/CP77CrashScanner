@@ -88,11 +88,21 @@ Edit the `recommended` block to pin versions for your specific game patch.
 
 ## Building from source
 
+Requirements: Python 3.12+, Windows 10/11
+
 ```bash
-pip install pyinstaller
-pyinstaller --noconfirm CP77CrashScanner.spec
-# Output: dist/CP77CrashScanner.exe
+git clone https://github.com/dw1rf/CP77CrashScanner.git
+cd CP77CrashScanner
+pip install -r requirements.txt
+build_windows.bat
 ```
+
+Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
+Release ZIP: `dist\CP77CrashScanner_v1.1.0.zip`
+
+**Note on antivirus detections:** PyInstaller bundles a Python runtime which some heuristic engines flag as suspicious. This build uses no UPX compression, no obfuscation, and no self-extracting installers. Full source code is available for review. Some AV vendors may still produce false positives — if you encounter one, please report it to the AV vendor's false-positive portal.
+
+For code signing: set `WINDOWS_CERT_PFX_BASE64` and `WINDOWS_CERT_PASSWORD` as GitHub Actions secrets. The workflow will automatically sign the EXE when these secrets are present.
 
 ## License
 

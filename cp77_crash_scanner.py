@@ -9,6 +9,8 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
+__version__ = "1.1.0"
+
 import os
 import re
 import sys

@@ -1,0 +1,95 @@
+name: Build CP77 Crash Scanner
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build with PyInstaller (onedir, no UPX)
+        run: pyinstaller --noconfirm CP77CrashScanner.spec
+
+      - name: Generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path
+          Get-ChildItem -Recurse -File dist\CP77CrashScanner | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            $rel  = $_.FullName.Substring($root.Length + 1)
+            "$hash  $rel"
+          } | Out-File -Encoding utf8 dist\SHA256SUMS.txt
+
+      - name: Create release ZIP
+        shell: pwsh
+        run: |
+          $items = @('dist\CP77CrashScanner', 'README.md', 'dist\SHA256SUMS.txt')
+          if (Test-Path 'README_RU.md') { $items += 'README_RU.md' }
+          Compress-Archive -Force -Path $items -DestinationPath dist\CP77CrashScanner_v1.1.0.zip
+
+      # ---------------------------------------------------------------------------
+      # Code signing — OPTIONAL. Skipped automatically if secrets are not set.
+      #
+      # To enable signing:
+      #   1. Obtain a code-signing certificate (e.g. from Sectigo, DigiCert, etc.)
+      #   2. Export it as a PFX file (certificate + private key)
+      #   3. Base64-encode the PFX:
+      #      PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))
+      #   4. In your GitHub repo → Settings → Secrets → Actions, add:
+      #        WINDOWS_CERT_PFX_BASE64   ← the base64 string from step 3
+      #        WINDOWS_CERT_PASSWORD     ← the PFX export password
+      # ---------------------------------------------------------------------------
+      - name: Sign EXE (optional — runs only when cert secret is present)
+        if: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD:   ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfxPath = "$env:TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+
+          # Locate signtool.exe (Windows SDK, bundled on windows-latest runners)
+          $signtool = (Get-ChildItem -Recurse `
+            "C:\Program Files (x86)\Windows Kits\10\bin" `
+            -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'x64' } |
+            Select-Object -First 1).FullName
+
+          & $signtool sign `
+            /f  $pfxPath `
+            /p  $env:WINDOWS_CERT_PASSWORD `
+            /tr http://timestamp.digicert.com `
+            /td sha256 /fd sha256 `
+            dist\CP77CrashScanner\CP77CrashScanner.exe
+
+          Remove-Item $pfxPath
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CP77CrashScanner_v1.1.0
+          path: dist\CP77CrashScanner_v1.1.0.zip
+
+      # Create GitHub Release only on tag pushes (e.g. git tag v1.1.0 && git push --tags)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist\CP77CrashScanner_v1.1.0.zip
+          generate_release_notes: true
