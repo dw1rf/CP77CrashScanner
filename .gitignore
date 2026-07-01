@@ -1,5 +1,6 @@
 build/
 dist/
+dist_nuitka/
 __pycache__/
 *.pyc
 *.pyo
