@@ -9,7 +9,7 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 import os
 import re
@@ -115,7 +115,21 @@ TR = {
     "tab_lf": {"ru": "  Не загрузилось ⚠  ", "en": "  Didn't load ⚠  "},
     "tab_err": {"ru": "  Все ошибки  ", "en": "  All errors  "},
     "tab_comp": {"ru": "  Совместимость  ", "en": "  Compatibility  "},
+    "tab_conf": {"ru": "  Конфликты r6 ⚔  ", "en": "  r6 conflicts ⚔  "},
     "tab_dmp": {"ru": "  Дампы и логи  ", "en": "  Dumps & logs  "},
+    "conf_hint": {"ru": "Конфликты и несовместимости в r6/scripts (redscript), TweakXL и ArchiveXL: "
+                        "что перезаписывает чужой метод/запись или ссылается на отсутствующее. "
+                        "«Конфликт (перезапись)» = два мода правят один метод — активен только один.",
+                  "en": "Conflicts and incompatibilities in r6/scripts (redscript), TweakXL and ArchiveXL: "
+                        "what overrides another mod's method/record or references something missing. "
+                        "“Conflict (override)” = two mods edit the same method — only one wins."},
+    "conf_none": {"ru": "✓ Конфликтов в r6 не найдено.", "en": "✓ No r6 conflicts found."},
+    "conf_kind_conflict": {"ru": "конфликт (перезапись)", "en": "conflict (override)"},
+    "conf_kind_error": {"ru": "ошибка компиляции", "en": "compile error"},
+    "col_target": {"ru": "Цель (класс/метод)", "en": "Target (class/method)"},
+    "col_kind": {"ru": "Вид", "en": "Kind"},
+    "col_sys": {"ru": "Система", "en": "System"},
+    "sum_conf": {"ru": "Конфликтов в r6: ", "en": "r6 conflicts: "},
     "col_modsrc": {"ru": "Мод / источник", "en": "Mod / source"},
     "col_errors": {"ru": "Ошибки (×повторы)", "en": "Errors (×repeats)"},
     "col_warn": {"ru": "Предупр.", "en": "Warnings"},
@@ -222,6 +236,21 @@ class Finding:
         self.line_no = line_no
 
 
+class Conflict:
+    """Несовместимость/конфликт в r6: перезапись метода redscript, ошибка
+    компиляции скрипта, либо конфликт/зависимость TweakXL/ArchiveXL."""
+    __slots__ = ("mod", "system", "kind", "target", "message", "path", "line_no")
+
+    def __init__(self, mod, system, kind, target, message, path, line_no):
+        self.mod = mod            # имя мода/папки (или система, если мод неизвестен)
+        self.system = system      # "redscript" | "TweakXL" | "ArchiveXL"
+        self.kind = kind          # "conflict" (перезапись) | "error" (компиляция/зависимость)
+        self.target = target      # напр. "@replaceMethod(RPGManager)"
+        self.message = message.rstrip()
+        self.path = path
+        self.line_no = line_no
+
+
 class ScanResult:
     def __init__(self):
         self.findings = []
@@ -231,6 +260,7 @@ class ScanResult:
         self.versions = {}
         self.recommended = {}
         self.problems = []
+        self.conflicts = []
         self.scanned_files = 0
         self.log_files = []
         self.roots = []
@@ -348,6 +378,88 @@ BRACKET_PREFIX = re.compile(r"^\s*(\[[^\]]*\]\s*)+")
 REDS_MOD = re.compile(r"([^\\/]+)[\\/].+\.reds", re.IGNORECASE)
 CET_MOD = re.compile(r"[\\/]cyber_engine_tweaks[\\/]mods[\\/]([^\\/]+)[\\/]", re.IGNORECASE)
 
+# --- обнаружение конфликтов в r6 (redscript / TweakXL / ArchiveXL) -------------
+# redscript пишет диагностику многострочными блоками, которые построчный
+# сканер не видит. Пример конфликта перезаписи метода:
+#   At ...\quickhacks_sort_by_slot\quickhacks_sort_by_slot.reds:58:1:
+#   @replaceMethod(RPGManager)
+#   ^^^
+#   this method replacement overwrites a previous annotation targeting the same method...
+REDS_BLOCK_RE = re.compile(
+    r"At\s+(?P<path>[^\n]+?\.reds):(?P<line>\d+):\d+:[^\n]*\n"
+    r"(?P<body>(?:[^\n]*\n){0,3}?)"
+    r"(?P<msg>[^\n]*(?:overwrites a previous annotation|already (?:has|been)[^\n]*replace|"
+    r"is already replaced|redefinition|is not defined|has no member|"
+    r"unresolved|cannot find|expected [^\n]*got)[^\n]*)",
+    re.IGNORECASE)
+REDS_ANNOT_RE = re.compile(r"@\w+\s*\([^)]*\)")
+REDS_CONFLICT_MSG_RE = re.compile(
+    r"overwrites a previous annotation|already (?:has|been)[^\n]*replace|is already replaced",
+    re.IGNORECASE)
+# TweakXL/ArchiveXL — однострочные [error]/[warning] о конфликтах записей и зависимостях
+XL_CONFLICT_RE = re.compile(
+    r"(conflict|already (?:defined|exists|registered|loaded)|redefin|"
+    r"depends on|requires\b|missing dependency|failed to resolve|"
+    r"could not (?:find|resolve)|cannot find)", re.IGNORECASE)
+XL_ISCONFLICT_RE = re.compile(r"conflict|already|redefin", re.IGNORECASE)
+CONFLICT_CAP = 300
+
+
+def reds_mod_from_path(path):
+    """Из пути .reds достаёт имя мода: первая папка после r6/scripts,
+    либо имя файла для «плоских» модов из одного скрипта."""
+    p = path.replace("\\", "/")
+    m = re.search(r"/r6/scripts/(.+)$", p, re.IGNORECASE)
+    rel = m.group(1) if m else os.path.basename(p)
+    parts = [x for x in rel.split("/") if x]
+    if not parts:
+        return path
+    if len(parts) > 1:
+        return parts[0]
+    return re.sub(r"\.reds$", "", parts[0], flags=re.IGNORECASE)
+
+
+def extract_redscript_conflicts(path, content):
+    out = []
+    for m in REDS_BLOCK_RE.finditer(content):
+        if len(out) >= CONFLICT_CAP:
+            break
+        fpath = m.group("path").strip()
+        msg = m.group("msg").strip()
+        am = REDS_ANNOT_RE.search(m.group("body") or "")
+        target = am.group(0).strip() if am else ""
+        kind = "conflict" if REDS_CONFLICT_MSG_RE.search(msg) else "error"
+        out.append(Conflict(reds_mod_from_path(fpath), "redscript", kind, target, msg, path,
+                            int(m.group("line"))))
+    return out
+
+
+def extract_xl_conflicts(path, content, system):
+    out = []
+    for i, line in enumerate(content.splitlines(), 1):
+        if len(out) >= CONFLICT_CAP:
+            break
+        if not (EXPLICIT_ERROR_RE.search(line) or EXPLICIT_WARN_RE.search(line)):
+            continue
+        if NOISE_RE.search(line) or not XL_CONFLICT_RE.search(line):
+            continue
+        kind = "conflict" if XL_ISCONFLICT_RE.search(line) else "error"
+        msg = BRACKET_PREFIX.sub("", line).strip()
+        out.append(Conflict(system, system, kind, "", msg, path, i))
+    return out
+
+
+def extract_conflicts(path, content):
+    low = path.replace("\\", "/").lower()
+    base = os.path.basename(path).lower()
+    if "redscript" in base or "/r6/logs/" in low:
+        return extract_redscript_conflicts(path, content)
+    if base.startswith("tweakxl"):
+        return extract_xl_conflicts(path, content, "TweakXL")
+    if base.startswith("archivexl"):
+        return extract_xl_conflicts(path, content, "ArchiveXL")
+    return []
+
 
 def norm_text(text):
     return BRACKET_PREFIX.sub("", text).strip().lower()
@@ -438,6 +550,7 @@ def scan(instance_dir, game_dir, recent_only=False):
 
     raw = {}
     seen: set = set()
+    conflict_seen: set = set()
     for path, mt in log_paths:
         res.scanned_files += 1
         content = read_tail(path)
@@ -446,6 +559,11 @@ def scan(instance_dir, game_dir, recent_only=False):
                 m = pat.search(content)
                 if m:
                     res.versions[name] = m.group(1)
+        for c in extract_conflicts(path, content):
+            ckey = (c.mod, c.system, c.target, norm_text(c.message))
+            if ckey not in conflict_seen:
+                conflict_seen.add(ckey)
+                res.conflicts.append(c)
         for i, line in enumerate(content.splitlines(), 1):
             if not line.strip():
                 continue
@@ -493,6 +611,8 @@ def scan(instance_dir, game_dir, recent_only=False):
     findings.sort(key=lambda f: (not f.is_load_fail, f.severity != "ERROR", -f.count))
     res.findings = findings
     res.load_fails = [f for f in findings if f.is_load_fail]
+    # конфликты (перезаписи) выше ошибок компиляции; затем по системе и моду
+    res.conflicts.sort(key=lambda c: (c.kind != "conflict", c.system, c.mod))
 
     for f in findings:
         agg = res.by_source.setdefault(f.source, {"err_u": 0, "warn_u": 0, "err_o": 0,
@@ -557,6 +677,15 @@ def build_report(res, instance, game, include_raw=True):
         L.append(f"  [{f.source}] x{f.count}  {f.text.strip()}")
     L.append("")
 
+    L.append(f"--- MOD CONFLICTS in r6 (redscript / TweakXL / ArchiveXL) ({len(res.conflicts)}) ---")
+    if not res.conflicts:
+        L.append("  (none)")
+    for c in res.conflicts:
+        kind = "CONFLICT" if c.kind == "conflict" else "ERROR"
+        tgt = f" {c.target}" if c.target else ""
+        L.append(f"  [{kind}] [{c.system}] {c.mod}{tgt}: {c.message.strip()}")
+    L.append("")
+
     L.append("--- TOP MODS BY ERRORS ---")
     for src, a in sorted(res.by_source.items(), key=lambda kv: -kv[1]["err_o"]):
         if a["err_o"] > 0:
@@ -613,6 +742,10 @@ def run_cli():
     print(f"\nFAILED TO LOAD/COMPILE: {len(res.load_fails)}")
     for f in res.load_fails[:15]:
         print(f"  [{f.source}] x{f.count}  {f.text[:140]}")
+    print(f"\nMOD CONFLICTS (r6): {len(res.conflicts)}")
+    for c in res.conflicts[:15]:
+        tgt = f" {c.target}" if c.target else ""
+        print(f"  [{c.kind}] [{c.system}] {c.mod}{tgt}: {c.message[:120]}")
     return 0
 
 
@@ -779,6 +912,17 @@ def run_gui():
         lv = ttk.Scrollbar(tab_lf, orient="vertical", command=lftree.yview); lftree.configure(yscrollcommand=lv.set)
         lftree.pack(side="left", fill="both", expand=True); lv.pack(side="right", fill="y")
 
+        tab_conf = ttk.Frame(nb, padding=6); nb.add(tab_conf, text=T("tab_conf"))
+        ttk.Label(tab_conf, text=T("conf_hint"), wraplength=1080, justify="left").pack(anchor="w", pady=(0, 4))
+        ctree = ttk.Treeview(tab_conf, columns=("mod", "sys", "kind", "target", "msg"), show="headings")
+        for c, w, t in [("mod", 210, T("col_modsrc")), ("sys", 90, T("col_sys")),
+                        ("kind", 150, T("col_kind")), ("target", 190, T("col_target")),
+                        ("msg", 600, T("col_msg"))]:
+            ctree.heading(c, text=t); ctree.column(c, width=w, anchor="w")
+        ctree.tag_configure("conflict", foreground=ERRC); ctree.tag_configure("error", foreground=WARNC)
+        cv = ttk.Scrollbar(tab_conf, orient="vertical", command=ctree.yview); ctree.configure(yscrollcommand=cv.set)
+        ctree.pack(side="left", fill="both", expand=True); cv.pack(side="right", fill="y")
+
         tab_err = ttk.Frame(nb, padding=6); nb.add(tab_err, text=T("tab_err"))
         tree = ttk.Treeview(tab_err, columns=("sev", "cnt", "src", "text"), show="headings")
         for c, w, t in [("sev", 60, T("col_type")), ("cnt", 55, T("col_n")),
@@ -811,7 +955,7 @@ def run_gui():
             except Exception as e:
                 messagebox.showerror("Error", str(e))
 
-        for tv in (tree, lftree, dtree, gtree):
+        for tv in (tree, lftree, dtree, gtree, ctree):
             tv.bind("<Double-1>", lambda e, t=tv: (t.focus() in paths) and open_path(paths[t.focus()]))
 
         def render(res):
@@ -829,6 +973,8 @@ def run_gui():
                                      T("hidden") if hide_cos else ""))
             sum_text.insert("end", T("sum_lf"))
             sum_text.insert("end", f"{len(res.load_fails)}\n", "err" if res.load_fails else "ok")
+            sum_text.insert("end", T("sum_conf"))
+            sum_text.insert("end", f"{len(res.conflicts)}\n", "err" if res.conflicts else "ok")
             sum_text.insert("end", T("sum_dmp", len(res.dumps)), "err" if res.dumps else "ok")
 
             sum_text.insert("end", "\n" + T("sum_top") + "\n", "h")
@@ -872,6 +1018,16 @@ def run_gui():
             for f in res.load_fails:
                 iid = lftree.insert("", "end", values=(f.source, f.count, f.text[:500]), tags=("LF",))
                 paths[iid] = f.path
+
+            ctree.delete(*ctree.get_children())
+            if not res.conflicts:
+                ctree.insert("", "end", values=("—", "", "", "", T("conf_none")))
+            for c in res.conflicts:
+                iid = ctree.insert("", "end",
+                                   values=(c.mod, c.system, T("conf_kind_" + c.kind),
+                                           c.target, c.message[:500]),
+                                   tags=(c.kind,))
+                paths[iid] = c.path
 
             tree.delete(*tree.get_children())
             for f in res.findings:

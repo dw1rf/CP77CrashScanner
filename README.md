@@ -12,6 +12,7 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 
 - **Auto-scan** on startup if MO2 instance is configured
 - **Crash cause detection** — shows the specific mod(s) responsible, not generic hints
+- **r6 conflict detection** *(new in 1.2)* — parses `redscript`, `TweakXL` and `ArchiveXL` logs to name mods that overwrite each other's methods/records or reference missing code
 - **Framework version check** — RED4ext, CET, ArchiveXL, TweakXL, Codeware, redscript
 - **Failed-to-load tab** — ready-to-share list of incompatible mods
 - **Vortex support** — auto-detected, no extra configuration needed
@@ -52,6 +53,7 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 | Summary | Error counts, top mods by errors, crash causes with mod names |
 | By Mod | All mods grouped with expandable error list |
 | Didn't Load ⚠ | Mods that failed to load or compile |
+| r6 conflicts ⚔ | Mods overwriting the same method/record + redscript compile errors |
 | All Errors | Every unique error/warning, deduped |
 | Compatibility | Framework versions, Vortex status, scanned paths |
 | Dumps & Logs | Crash dumps and log files with timestamps |
@@ -67,6 +69,21 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 | `engine crash (access violation)` | Archive conflict or corrupted `.archive` |
 | `missing .archive` | Incomplete mod installation |
 | `NCA: state machine error` | Night City Allies crash in specific locations |
+
+## Mod conflict detection in r6 *(new in 1.2)*
+
+The archive conflict detectors in MO2/Vortex only cover file overwrites in `archive/pc/mod`. They can't see conflicts inside `r6` — those only surface when the `redscript` compiler runs. This tool reads those logs and names the offending mods on the **r6 conflicts ⚔** tab:
+
+| Source | What it catches |
+|--------|-----------------|
+| `redscript` | Two mods `@replaceMethod`-ing the same method (only one can win) — reports the losing mod and target class |
+| `redscript` | Compile errors — missing class/method, unresolved references from an outdated script mod |
+| `TweakXL` | Conflicting / redefined records and dependency issues |
+| `ArchiveXL` | Missing dependencies and resource conflicts |
+
+Example output: `[CONFLICT] [redscript] quickhacks_sort_by_slot @replaceMethod(RPGManager): this method replacement overwrites a previous annotation…`
+
+> Note: redscript only names the *losing* mod in an override conflict (the one whose replacement was dropped) — the engine does not log the winner. That's still enough to identify the culprit and disable it or fix the load order.
 
 ## Configuration
 
@@ -98,7 +115,7 @@ build_windows.bat
 ```
 
 Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
-Release ZIP: `dist\CP77CrashScanner_v1.1.0.zip`
+Release ZIP: `dist\CP77CrashScanner_v1.2.0.zip`
 
 **Note on antivirus detections:** PyInstaller bundles a Python runtime which some heuristic engines flag as suspicious. This build uses no UPX compression, no obfuscation, and no self-extracting installers. Full source code is available for review. Some AV vendors may still produce false positives — if you encounter one, please report it to the AV vendor's false-positive portal.
 
