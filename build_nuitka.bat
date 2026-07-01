@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 > nul
 echo ============================================
 echo  CP77 Crash Scanner - Nuitka onedir build
@@ -34,8 +34,8 @@ python -m nuitka ^
   --output-filename=CP77CrashScanner.exe ^
   --company-name=dw1rf ^
   --product-name="CP77 Crash Scanner" ^
-  --file-version=1.1.0.0 ^
-  --product-version=1.1.0.0 ^
+  --file-version=1.2.0.0 ^
+  --product-version=1.2.0.0 ^
   --file-description="Cyberpunk 2077 crash log and mod compatibility scanner" ^
   --copyright="Copyright (c) dw1rf" ^
   cp77_crash_scanner.py
