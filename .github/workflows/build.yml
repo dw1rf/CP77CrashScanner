@@ -6,6 +6,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Release creation + generate_release_notes require write access to repo contents
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
