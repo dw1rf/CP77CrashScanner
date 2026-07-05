@@ -17,6 +17,7 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 - **Failed-to-load tab** — ready-to-share list of incompatible mods
 - **Vortex support** — auto-detected, no extra configuration needed
 - **Bilingual UI** — Russian / English, switchable at runtime
+- **Purge logs** *(new in 1.3)* — one-click delete of all scanned log files and crash dumps, with a yes/no confirmation. Clear stale logs, launch the game to reproduce the crash, then scan a clean set
 - **One-file export** — full report with raw logs in a single `.txt`
 - **Copy-paste** — all result panels are selectable and copyable
 
@@ -115,7 +116,7 @@ build_windows.bat
 ```
 
 Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
-Release ZIP: `dist\CP77CrashScanner_v1.2.0.zip`
+Release ZIP: `dist\CP77CrashScanner_v1.3.0.zip`
 
 **Note on antivirus detections:** PyInstaller bundles a Python runtime which some heuristic engines flag as suspicious. This build uses no UPX compression, no obfuscation, and no self-extracting installers. Full source code is available for review. Some AV vendors may still produce false positives — if you encounter one, please report it to the AV vendor's false-positive portal.
 

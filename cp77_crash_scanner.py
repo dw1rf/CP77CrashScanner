@@ -9,7 +9,7 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 import os
 import re
@@ -107,6 +107,20 @@ TR = {
     "embed_raw": {"ru": "Вкладывать сырые логи в отчёт", "en": "Embed raw logs in report"},
     "scan": {"ru": "🔍  СКАНИРОВАТЬ", "en": "🔍  SCAN"},
     "export": {"ru": "📄  ОТЧЁТ В 1 ФАЙЛ", "en": "📄  REPORT TO 1 FILE"},
+    "purge": {"ru": "🗑  Очистить логи", "en": "🗑  Purge logs"},
+    "purge_t": {"ru": "Очистка логов", "en": "Purge logs"},
+    "purge_none": {"ru": "Лог-файлы не найдены — очищать нечего.",
+                   "en": "No log files found — nothing to purge."},
+    "purge_confirm": {"ru": "Удалить {} лог-файлов и дампов ({})?\n\n"
+                            "Действие необратимо. Логи создаются заново при следующем запуске игры.\n"
+                            "Совет: удали логи, запусти игру, воспроизведи вылет — и только потом сканируй.",
+                      "en": "Delete {} log files and dumps ({})?\n\n"
+                            "This cannot be undone. Logs are regenerated the next time you launch the game.\n"
+                            "Tip: purge, launch the game, reproduce the crash — then scan."},
+    "purge_done": {"ru": "Очищено: удалено {} файлов · освобождено {}",
+                   "en": "Purged: {} files deleted · {} freed"},
+    "purge_errors": {"ru": "Не удалось удалить {} файлов (заняты игрой или нет прав).",
+                     "en": "Failed to delete {} files (locked by the game or no permission)."},
     "ready": {"ru": "Готов к сканированию.", "en": "Ready to scan."},
     "pick_inst": {"ru": "Папка инстанса MO2", "en": "MO2 instance folder"},
     "pick_game": {"ru": "Папка игры Cyberpunk 2077", "en": "Cyberpunk 2077 game folder"},
@@ -346,6 +360,49 @@ def collect_scan_dirs(instance_dir, game_dir):
     if vortex_dir:
         dirs.append(vortex_dir)
     return [d for d in dirs if os.path.isdir(d)]
+
+
+def collect_purge_targets(instance_dir, game_dir):
+    """Файлы, которые удалит «Очистить логи»: те же логи и дампы, что читает
+    сканер (те же папки, .log/.txt без документации и .dmp)."""
+    targets = []
+    seen: set = set()
+    for d in collect_scan_dirs(instance_dir, game_dir):
+        for root, _, files in os.walk(d):
+            for name in files:
+                full = os.path.join(root, name)
+                if full in seen:
+                    continue
+                seen.add(full)
+                low = name.lower()
+                if low.endswith(".dmp"):
+                    targets.append(full)
+                elif low.endswith((".log", ".txt")):
+                    stem = re.sub(r"\.(log|txt)$", "", low)
+                    if stem in SKIP_STEMS:
+                        continue
+                    targets.append(full)
+    return targets
+
+
+def purge_logs(instance_dir, game_dir):
+    """Удаляет лог-файлы и крэш-дампы из просканированных папок.
+    Возвращает (удалено, освобождено_байт, [ошибки])."""
+    deleted = 0
+    freed = 0
+    errors = []
+    for path in collect_purge_targets(instance_dir, game_dir):
+        try:
+            sz = os.path.getsize(path)
+        except OSError:
+            sz = 0
+        try:
+            os.remove(path)
+            deleted += 1
+            freed += sz
+        except OSError as e:
+            errors.append((path, str(e)))
+    return deleted, freed, errors
 
 
 def read_tail(path, max_bytes=MAX_READ_BYTES):
@@ -1132,12 +1189,37 @@ def run_gui():
                                            messagebox.showerror(T("exp_err_t"), msg)))
             threading.Thread(target=worker, daemon=True).start()
 
+        def do_purge():
+            inst, game = inst_var.get().strip(), game_var.get().strip()
+            targets = collect_purge_targets(inst, game)
+            if not targets:
+                messagebox.showinfo(T("purge_t"), T("purge_none"))
+                return
+            total = 0
+            for p in targets:
+                try:
+                    total += os.path.getsize(p)
+                except OSError:
+                    pass
+            # Явное подтверждение да/нет, по умолчанию «Нет» — чтобы не стереть случайно.
+            if not messagebox.askyesno(
+                    T("purge_t"), T("purge_confirm", len(targets), human_size(total)),
+                    icon="warning", default="no"):
+                return
+            deleted, freed, errors = purge_logs(inst, game)
+            state["result"] = None
+            status_var.set(T("purge_done", deleted, human_size(freed)))
+            if errors:
+                messagebox.showwarning(T("purge_t"), T("purge_errors", len(errors)))
+            do_scan()
+
         scan_btn = ttk.Button(top, text=T("scan"), command=do_scan)
         scan_btn.grid(row=1, column=3, padx=(10, 0), pady=(6, 0), sticky="e")
         ttk.Button(top, text=T("export"), command=do_export).grid(row=2, column=3, padx=(10, 0), pady=(6, 0), sticky="e")
 
         bottom = ttk.Frame(root); bottom.pack(fill="x", padx=12, pady=(0, 8))
         ttk.Label(bottom, textvariable=status_var, anchor="w").pack(side="left", fill="x", expand=True)
+        ttk.Button(bottom, text=T("purge"), command=do_purge).pack(side="left", padx=(10, 0))
 
         def open_github(e=None):
             import webbrowser; webbrowser.open(GITHUB_URL)

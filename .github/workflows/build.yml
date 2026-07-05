@@ -40,7 +40,7 @@ jobs:
         run: |
           $items = @('dist\CP77CrashScanner', 'README.md', 'dist\SHA256SUMS.txt')
           if (Test-Path 'README_RU.md') { $items += 'README_RU.md' }
-          Compress-Archive -Force -Path $items -DestinationPath dist\CP77CrashScanner_v1.2.0.zip
+          Compress-Archive -Force -Path $items -DestinationPath dist\CP77CrashScanner_v1.3.0.zip
 
       # ---------------------------------------------------------------------------
       # Code signing — OPTIONAL. Skipped automatically if secrets are not set.
@@ -83,13 +83,13 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CP77CrashScanner_v1.2.0
-          path: dist\CP77CrashScanner_v1.2.0.zip
+          name: CP77CrashScanner_v1.3.0
+          path: dist\CP77CrashScanner_v1.3.0.zip
 
-      # Create GitHub Release only on tag pushes (e.g. git tag v1.2.0 && git push --tags)
+      # Create GitHub Release only on tag pushes (e.g. git tag v1.3.0 && git push --tags)
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist\CP77CrashScanner_v1.2.0.zip
+          files: dist\CP77CrashScanner_v1.3.0.zip
           generate_release_notes: true

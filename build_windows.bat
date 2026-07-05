@@ -17,8 +17,8 @@ echo [2/5] Cleaning old dist...
 if exist dist\CP77CrashScanner (
     rmdir /s /q dist\CP77CrashScanner
 )
-if exist dist\CP77CrashScanner_v1.1.0.zip (
-    del /q dist\CP77CrashScanner_v1.1.0.zip
+if exist dist\CP77CrashScanner_v1.3.0.zip (
+    del /q dist\CP77CrashScanner_v1.3.0.zip
 )
 if exist dist\SHA256SUMS.txt (
     del /q dist\SHA256SUMS.txt
@@ -51,7 +51,7 @@ echo [5/5] Creating release ZIP...
 powershell -NoProfile -Command ^
   "$items = @('dist\CP77CrashScanner', 'README.md', 'dist\SHA256SUMS.txt');" ^
   "if (Test-Path 'README_RU.md') { $items += 'README_RU.md' };" ^
-  "Compress-Archive -Force -Path $items -DestinationPath 'dist\CP77CrashScanner_v1.1.0.zip'"
+  "Compress-Archive -Force -Path $items -DestinationPath 'dist\CP77CrashScanner_v1.3.0.zip'"
 if errorlevel 1 (
     echo ERROR: ZIP creation failed
     exit /b 1
@@ -61,5 +61,5 @@ echo.
 echo ============================================
 echo  Build complete
 echo  EXE:  dist\CP77CrashScanner\CP77CrashScanner.exe
-echo  ZIP:  dist\CP77CrashScanner_v1.1.0.zip
+echo  ZIP:  dist\CP77CrashScanner_v1.3.0.zip
 echo ============================================
