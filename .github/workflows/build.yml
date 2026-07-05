@@ -10,6 +10,10 @@ jobs:
   build:
     runs-on: windows-latest
 
+    # secrets context is not allowed in step-level `if`; surface presence via job env
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,7 +59,7 @@ jobs:
       #        WINDOWS_CERT_PASSWORD     ← the PFX export password
       # ---------------------------------------------------------------------------
       - name: Sign EXE (optional — runs only when cert secret is present)
-        if: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+        if: ${{ env.HAS_SIGNING_CERT == 'true' }}
         shell: pwsh
         env:
           WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
