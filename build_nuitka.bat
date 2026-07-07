@@ -9,8 +9,14 @@ echo PyInstaller bootloader signature that antiviruses
 echo flag is gone. This drastically reduces false positives.
 echo.
 
-echo [1/3] Installing/updating build deps...
-pip install -U nuitka ordered-set zstandard
+set /p VERSION=<version.txt
+if "%VERSION%"=="" (
+    echo ERROR: version.txt is empty
+    exit /b 1
+)
+
+echo [1/3] Installing pinned build deps...
+pip install -r requirements.txt
 if errorlevel 1 (
     echo ERROR: pip install failed
     exit /b 1
@@ -34,8 +40,8 @@ python -m nuitka ^
   --output-filename=CP77CrashScanner.exe ^
   --company-name=dw1rf ^
   --product-name="CP77 Crash Scanner" ^
-  --file-version=1.2.0.0 ^
-  --product-version=1.2.0.0 ^
+  --file-version=%VERSION%.0 ^
+  --product-version=%VERSION%.0 ^
   --file-description="Cyberpunk 2077 crash log and mod compatibility scanner" ^
   --copyright="Copyright (c) dw1rf" ^
   cp77_crash_scanner.py

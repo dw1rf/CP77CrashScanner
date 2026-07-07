@@ -104,11 +104,14 @@
 
 ## Сборка из исходников
 
+Требования: Python 3.12+, Windows 10/11.
+
 ```bash
-pip install pyinstaller
-pyinstaller --noconfirm CP77CrashScanner.spec
-# Результат: dist/CP77CrashScanner.exe
+pip install -r requirements.txt
+build_windows.bat
 ```
+
+Результат: `dist\CP77CrashScanner\CP77CrashScanner.exe` и релизный ZIP. Сборка использует Nuitka standalone без PyInstaller, UPX, обфускации и самораспаковывающегося установщика. В архив включён `SHA256SUMS.txt` с проверяемыми контрольными суммами.
 
 ## Лицензия
 

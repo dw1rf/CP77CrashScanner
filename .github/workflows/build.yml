@@ -1,4 +1,4 @@
-﻿name: Build CP77 Crash Scanner
+name: Build CP77 Crash Scanner
 
 on:
   push:
@@ -6,7 +6,6 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Release creation + generate_release_notes require write access to repo contents
 permissions:
   contents: write
 
@@ -14,7 +13,6 @@ jobs:
   build:
     runs-on: windows-latest
 
-    # secrets context is not allowed in step-level `if`; surface presence via job env
     env:
       HAS_SIGNING_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
 
@@ -26,78 +24,133 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
 
-      - name: Install dependencies
+      - name: Install pinned build dependencies
         run: pip install -r requirements.txt
 
-      - name: Build with PyInstaller (onedir, no UPX)
-        run: pyinstaller --noconfirm CP77CrashScanner.spec
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
 
-      - name: Generate SHA256SUMS.txt
+      - name: Read version
+        id: version
         shell: pwsh
         run: |
-          $root = (Get-Location).Path
-          Get-ChildItem -Recurse -File dist\CP77CrashScanner | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
-            $rel  = $_.FullName.Substring($root.Length + 1)
-            "$hash  $rel"
-          } | Out-File -Encoding utf8 dist\SHA256SUMS.txt
+          $version = (Get-Content version.txt -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Invalid version.txt: $version"
+          }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match version.txt ($version)"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Create release ZIP
+      - name: Build with Nuitka (standalone, no onefile)
         shell: pwsh
         run: |
-          $items = @('dist\CP77CrashScanner', 'README.md', 'dist\SHA256SUMS.txt')
-          if (Test-Path 'README_RU.md') { $items += 'README_RU.md' }
-          Compress-Archive -Force -Path $items -DestinationPath dist\CP77CrashScanner_v1.3.0.zip
+          $version = '${{ steps.version.outputs.version }}'
+          python -m nuitka `
+            --standalone `
+            --enable-plugin=tk-inter `
+            --windows-console-mode=disable `
+            --assume-yes-for-downloads `
+            --remove-output `
+            --output-dir=dist_nuitka `
+            --output-filename=CP77CrashScanner.exe `
+            --company-name=dw1rf `
+            --product-name="CP77 Crash Scanner" `
+            --file-version="$version.0" `
+            --product-version="$version.0" `
+            --file-description="Cyberpunk 2077 crash log and mod compatibility scanner" `
+            --copyright="Copyright (c) dw1rf" `
+            cp77_crash_scanner.py
+          if ($LASTEXITCODE -ne 0) { throw "Nuitka build failed with exit code $LASTEXITCODE" }
 
-      # ---------------------------------------------------------------------------
-      # Code signing — OPTIONAL. Skipped automatically if secrets are not set.
-      #
-      # To enable signing:
-      #   1. Obtain a code-signing certificate (e.g. from Sectigo, DigiCert, etc.)
-      #   2. Export it as a PFX file (certificate + private key)
-      #   3. Base64-encode the PFX:
-      #      PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))
-      #   4. In your GitHub repo → Settings → Secrets → Actions, add:
-      #        WINDOWS_CERT_PFX_BASE64   ← the base64 string from step 3
-      #        WINDOWS_CERT_PASSWORD     ← the PFX export password
-      # ---------------------------------------------------------------------------
-      - name: Sign EXE (optional — runs only when cert secret is present)
+          New-Item -ItemType Directory -Force dist\CP77CrashScanner | Out-Null
+          Copy-Item -Recurse -Force dist_nuitka\cp77_crash_scanner.dist\* dist\CP77CrashScanner\
+
+      # Signing must happen before checksums and ZIP creation so the published
+      # executable is the signed one and its recorded hash remains valid.
+      - name: Sign EXE (optional)
         if: ${{ env.HAS_SIGNING_CERT == 'true' }}
         shell: pwsh
         env:
           WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
-          WINDOWS_CERT_PASSWORD:   ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           $pfxPath = "$env:TEMP\codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          try {
+            [IO.File]::WriteAllBytes(
+              $pfxPath,
+              [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64)
+            )
+            $signtool = (Get-ChildItem -Recurse `
+              "C:\Program Files (x86)\Windows Kits\10\bin" `
+              -Filter signtool.exe -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\x64\\' } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1).FullName
+            if (-not $signtool) { throw 'signtool.exe was not found' }
 
-          # Locate signtool.exe (Windows SDK, bundled on windows-latest runners)
-          $signtool = (Get-ChildItem -Recurse `
-            "C:\Program Files (x86)\Windows Kits\10\bin" `
-            -Filter signtool.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'x64' } |
-            Select-Object -First 1).FullName
+            & $signtool sign `
+              /f $pfxPath `
+              /p $env:WINDOWS_CERT_PASSWORD `
+              /tr http://timestamp.digicert.com `
+              /td sha256 /fd sha256 `
+              dist\CP77CrashScanner\CP77CrashScanner.exe
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+          }
+          finally {
+            Remove-Item -Force -ErrorAction SilentlyContinue $pfxPath
+          }
 
-          & $signtool sign `
-            /f  $pfxPath `
-            /p  $env:WINDOWS_CERT_PASSWORD `
-            /tr http://timestamp.digicert.com `
-            /td sha256 /fd sha256 `
-            dist\CP77CrashScanner\CP77CrashScanner.exe
+      - name: Add documentation and generate checksums
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path dist\CP77CrashScanner).Path
+          Copy-Item README.md $package
+          Copy-Item README_RU.md $package
 
-          Remove-Item $pfxPath
+          Get-ChildItem -Recurse -File $package |
+            Where-Object Name -ne 'SHA256SUMS.txt' |
+            Sort-Object FullName |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+              $relative = $_.FullName.Substring($package.Length + 1)
+              "$hash  $relative"
+            } | Set-Content -Encoding utf8 "$package\SHA256SUMS.txt"
+
+      - name: Verify checksums and create release ZIP
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $package = (Resolve-Path dist\CP77CrashScanner).Path
+          foreach ($line in Get-Content "$package\SHA256SUMS.txt") {
+            if ($line -notmatch '^([0-9A-F]{64})  (.+)$') {
+              throw "Malformed checksum line: $line"
+            }
+            $path = Join-Path $package $Matches[2]
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Checksum path does not exist: $($Matches[2])"
+            }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            if ($actual -ne $Matches[1]) {
+              throw "Checksum mismatch: $($Matches[2])"
+            }
+          }
+          Compress-Archive -Force `
+            -Path dist\CP77CrashScanner `
+            -DestinationPath "dist\CP77CrashScanner_v$version.zip"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CP77CrashScanner_v1.3.0
-          path: dist\CP77CrashScanner_v1.3.0.zip
+          name: CP77CrashScanner_v${{ steps.version.outputs.version }}
+          path: dist/CP77CrashScanner_v${{ steps.version.outputs.version }}.zip
 
-      # Create GitHub Release only on tag pushes (e.g. git tag v1.3.0 && git push --tags)
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist\CP77CrashScanner_v1.3.0.zip
+          files: dist/CP77CrashScanner_v${{ steps.version.outputs.version }}.zip
           generate_release_notes: true

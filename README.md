@@ -116,11 +116,11 @@ build_windows.bat
 ```
 
 Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
-Release ZIP: `dist\CP77CrashScanner_v1.3.0.zip`
+Release ZIP: `dist\CP77CrashScanner_v1.3.1.zip`
 
-**Note on antivirus detections:** PyInstaller bundles a Python runtime which some heuristic engines flag as suspicious. This build uses no UPX compression, no obfuscation, and no self-extracting installers. Full source code is available for review. Some AV vendors may still produce false positives — if you encounter one, please report it to the AV vendor's false-positive portal.
+**Note on antivirus detections:** Release builds use Nuitka standalone mode — no PyInstaller bootloader, UPX compression, obfuscation, or self-extracting installer. Full source code and SHA-256 checksums are included for review. An unsigned executable can still trigger reputation-based warnings; report any false positive to the relevant antivirus vendor.
 
-For code signing: set `WINDOWS_CERT_PFX_BASE64` and `WINDOWS_CERT_PASSWORD` as GitHub Actions secrets. The workflow will automatically sign the EXE when these secrets are present.
+For code signing: set `WINDOWS_CERT_PFX_BASE64` and `WINDOWS_CERT_PASSWORD` as GitHub Actions secrets. The workflow signs the EXE before generating checksums and the release ZIP.
 
 ## License
 
