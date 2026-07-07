@@ -9,7 +9,7 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 import os
 import re
@@ -37,7 +37,8 @@ ERROR_RE = re.compile(
     r"not found|missing|mismatch|incompatible|unsupported)\b", re.IGNORECASE)
 WARN_RE = re.compile(r"\b(warn|warning|deprecated|outdated|skipping|skipped)\b", re.IGNORECASE)
 NOISE_RE = re.compile(
-    r"(no error|0 error|errors: 0|without error|error handler|errorlog|"
+    r"(no(?:\s+\w+){1,3}\s+errors?\s+(?:reported|detected|found|encountered)|"
+    r"no error|0 error|errors: 0|without error|error handler|errorlog|"
     r"on error|error_|error code 0\b|"
     r"set3DListenerAttributes.*?invalid object handle|"
     r"FMOD::Channel.*?->stop\(\).*?invalid object handle)",
@@ -45,6 +46,9 @@ NOISE_RE = re.compile(
 # Explicit log-level tags take priority over heuristic regex (e.g. "[warning] Type mismatch" → WARN, not ERROR)
 EXPLICIT_ERROR_RE = re.compile(r"\[(error|fatal|critical)\b", re.IGNORECASE)
 EXPLICIT_WARN_RE  = re.compile(r"\[(warn(?:ing)?)\b", re.IGNORECASE)
+REDSCRIPT_LOCATION_HEADER_RE = re.compile(
+    r"\[(?:error|fatal|critical|warn(?:ing)?)[^\]]*\]\s+At\s+.*\.reds:\d+:\d+:\s*$",
+    re.IGNORECASE)
 
 COSMETIC_RE = re.compile(
     r"(DynamicMesh.*(failed to instantiate|invalid path))|"
@@ -611,6 +615,8 @@ def scan(instance_dir, game_dir, recent_only=False):
     for path, mt in log_paths:
         res.scanned_files += 1
         content = read_tail(path)
+        low_path = path.replace("\\", "/").lower()
+        is_redscript_log = "redscript" in os.path.basename(path).lower() or "/r6/logs/" in low_path
         for name, pat in VERSION_PATTERNS:
             if name not in res.versions:
                 m = pat.search(content)
@@ -623,6 +629,8 @@ def scan(instance_dir, game_dir, recent_only=False):
                 res.conflicts.append(c)
         for i, line in enumerate(content.splitlines(), 1):
             if not line.strip():
+                continue
+            if is_redscript_log and REDSCRIPT_LOCATION_HEADER_RE.search(line):
                 continue
             sev = None
             # Explicit [error]/[warning] tags in the log format take priority over heuristic regexes.
