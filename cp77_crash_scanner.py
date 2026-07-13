@@ -9,7 +9,7 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 import os
 import re
@@ -42,6 +42,11 @@ NOISE_RE = re.compile(
     r"on error|error_|error code 0\b|"
     r"set3DListenerAttributes.*?invalid object handle|"
     r"FMOD::Channel.*?->stop\(\).*?invalid object handle)",
+    re.IGNORECASE)
+SUCCESS_RE = re.compile(
+    r"(?:\bmapping file in vfs:\s*.+)|"
+    r"(?:\bMod\s+.+\s+loaded!\s*(?:\(.+\))?\s*$)|"
+    r"(?:\b.+:\s*v?\d+(?:\.\d+)+\s+Initialized\.\s*$)",
     re.IGNORECASE)
 # Explicit log-level tags take priority over heuristic regex (e.g. "[warning] Type mismatch" → WARN, not ERROR)
 EXPLICIT_ERROR_RE = re.compile(r"\[(error|fatal|critical)\b", re.IGNORECASE)
@@ -81,6 +86,31 @@ DEFAULT_RECOMMENDED = {
     "TweakXL": "1.11.3", "Codeware": "1.20.3", "redscript": "0.5.27",
 }
 CORE_FRAMEWORKS = ["RED4ext", "Cyber Engine Tweaks", "ArchiveXL", "TweakXL", "Codeware", "redscript"]
+DEFAULT_FRAMEWORK_DEPENDENCIES = {
+    "ArchiveXL": [
+        {"name": "RED4ext", "min_version": "1.27.0"},
+        {"name": "redscript", "min_version": "0.5.27"},
+    ],
+    "TweakXL": [
+        {"name": "RED4ext", "min_version": "1.27.0"},
+        {"name": "redscript", "min_version": "0.5.27"},
+    ],
+    "Codeware": [
+        {"name": "RED4ext", "min_version": "1.27.0"},
+        {"name": "redscript", "min_version": "0.5.27"},
+    ],
+}
+
+FRAMEWORK_LOAD_PATTERNS = {
+    "RED4ext": re.compile(r"RED4ext.*(?:is initializing|initialized|loaded)", re.I),
+    "Cyber Engine Tweaks": re.compile(r"(?:Cyber Engine Tweaks|CET).*(?:initialized|loaded)", re.I),
+    "ArchiveXL": re.compile(r"ArchiveXL.*has been loaded", re.I),
+    "TweakXL": re.compile(r"TweakXL.*has been loaded", re.I),
+    "Codeware": re.compile(r"Codeware.*has been loaded", re.I),
+    "redscript": re.compile(
+        r"(?:redscript.*(?:compilation|compile).*(?:success|succeeded|finished)|"
+        r"scc invoked successfully)", re.I),
+}
 
 HEURISTICS = [
     (re.compile(r"redscript.*?(error|failed to compile|compilation failed)", re.I), "prob_redscript"),
@@ -199,6 +229,19 @@ TR = {
                         "Правь их под свой патч в scanner_config.json → \"recommended\".\n",
                   "en": "\n⚠ “reference” values are APPROXIMATE up-to-date versions, not hard requirements. "
                         "Edit them for your patch in scanner_config.json → \"recommended\".\n"},
+    "chain_h": {"ru": "ЦЕПОЧКИ ЗАВИСИМОСТЕЙ", "en": "DEPENDENCY CHAINS"},
+    "chain_ok": {"ru": "  ✓ Разрывов в обнаруженных цепочках нет.\n",
+                 "en": "  ✓ No breaks in detected dependency chains.\n"},
+    "chain_not_detected": {"ru": "не обнаружен", "en": "not detected"},
+    "chain_load_failed": {"ru": "не загрузился", "en": "failed to load"},
+    "chain_incompatible": {"ru": "несовместимая версия", "en": "incompatible version"},
+    "chain_insufficient_data": {"ru": "версия неизвестна", "en": "version unknown"},
+    "chain_invalid_rule": {"ru": "некорректное правило", "en": "invalid rule"},
+    "chain_possible_dependency": {"ru": "возможная проблема зависимости",
+                                  "en": "possible dependency problem"},
+    "chain_conf_log": {"ru": "подтверждено логом", "en": "confirmed by log"},
+    "chain_conf_rule": {"ru": "встроенное правило", "en": "built-in rule"},
+    "chain_conf_inference": {"ru": "возможная причина", "en": "possible cause"},
     "comp_folders": {"ru": "Просканированные папки:", "en": "Scanned folders:"},
     "prob_redscript": {"ru": "Ошибка компиляции redscript — частая причина чёрного экрана/вылета при загрузке. "
                              "Обычно виноват устаревший скрипт-мод.",
@@ -269,6 +312,38 @@ class Conflict:
         self.line_no = line_no
 
 
+class FrameworkState:
+    __slots__ = ("name", "version", "status", "evidence")
+
+    def __init__(self, name, version=None, status="not_detected", evidence=""):
+        self.name = name
+        self.version = version
+        self.status = status
+        self.evidence = evidence
+
+
+class ChainDiagnostic:
+    __slots__ = ("root", "reason", "affected", "chains", "constraint", "evidence", "confidence")
+
+    def __init__(self, root, reason, affected=None, chains=None, constraint="",
+                 evidence="", confidence="rule"):
+        self.root = root
+        self.reason = reason
+        self.affected = list(affected or [])
+        self.chains = list(chains or [])
+        self.constraint = constraint
+        self.evidence = evidence
+        self.confidence = confidence
+
+
+class FrameworkChainResult:
+    __slots__ = ("states", "diagnostics")
+
+    def __init__(self, states=None, diagnostics=None):
+        self.states = states or {}
+        self.diagnostics = diagnostics or []
+
+
 class ScanResult:
     def __init__(self):
         self.findings = []
@@ -279,6 +354,8 @@ class ScanResult:
         self.recommended = {}
         self.problems = []
         self.conflicts = []
+        self.framework_states = {}
+        self.chain_diagnostics = []
         self.scanned_files = 0
         self.log_files = []
         self.roots = []
@@ -567,10 +644,181 @@ def version_status(installed, recommended):
     return "old" if iv < rv else "ok"
 
 
+def _version_cmp(left, right):
+    lv, rv = vtuple(left), vtuple(right)
+    if not lv or not rv:
+        return None
+    n = max(len(lv), len(rv))
+    lv += (0,) * (n - len(lv))
+    rv += (0,) * (n - len(rv))
+    return (lv > rv) - (lv < rv)
+
+
+def _framework_from_source(source):
+    low = (source or "").lower()
+    exact = {
+        "cet (core)": "Cyber Engine Tweaks",
+        "cyber engine tweaks": "Cyber Engine Tweaks",
+        "archivexl": "ArchiveXL",
+        "tweakxl": "TweakXL",
+        "codeware": "Codeware",
+        "red4ext (loader)": "RED4ext",
+        "red4ext": "RED4ext",
+        "redscript": "redscript",
+    }
+    if low in exact:
+        return exact[low]
+    return None
+
+
+def _merged_dependency_rules(config_rules):
+    rules = {name: [dict(dep) for dep in deps]
+             for name, deps in DEFAULT_FRAMEWORK_DEPENDENCIES.items()}
+    if not isinstance(config_rules, dict):
+        return rules
+    for name, deps in config_rules.items():
+        if isinstance(name, str) and isinstance(deps, list):
+            rules[name] = [dict(dep) for dep in deps if isinstance(dep, dict)]
+    return rules
+
+
+def evaluate_framework_chains(versions, findings, rules, loaded_frameworks=None, recommended=None):
+    """Evaluate dependency rules and collapse shared root causes into one diagnostic."""
+    loaded_frameworks = set(loaded_frameworks or ())
+    recommended = recommended or {}
+    names = set(CORE_FRAMEWORKS) | set(versions) | set(rules)
+    for deps in rules.values():
+        for dep in deps:
+            if isinstance(dep, dict) and isinstance(dep.get("name"), str):
+                names.add(dep["name"])
+
+    failed = {}
+    for finding in findings:
+        if finding.severity != "ERROR" or finding.cosmetic:
+            continue
+        name = _framework_from_source(finding.source)
+        if name and (finding.is_load_fail or LOAD_FAIL_RE.search(finding.text)):
+            failed.setdefault(name, finding.text)
+
+    states = {}
+    for name in names:
+        version = versions.get(name)
+        if name in failed:
+            state = FrameworkState(name, version, "load_failed", failed[name])
+        elif version:
+            rec = recommended.get(name)
+            status = "incompatible" if rec and version_status(version, rec) == "old" else "loaded"
+            state = FrameworkState(name, version, status, "version detected")
+        elif name in loaded_frameworks:
+            state = FrameworkState(name, None, "insufficient_data", "loaded; version unknown")
+        else:
+            state = FrameworkState(name)
+        states[name] = state
+
+    diagnostics_by_key = {}
+
+    def add_diagnostic(root, reason, affected, chain, constraint="", evidence="", confidence="rule"):
+        key = (root, reason, constraint)
+        diag = diagnostics_by_key.get(key)
+        if not diag:
+            diag = ChainDiagnostic(root, reason, constraint=constraint,
+                                   evidence=evidence, confidence=confidence)
+            diagnostics_by_key[key] = diag
+        if affected not in diag.affected:
+            diag.affected.append(affected)
+        if chain not in diag.chains:
+            diag.chains.append(chain)
+
+    # Validate the graph first so config mistakes cannot recurse forever.
+    visiting, visited = set(), set()
+
+    def visit(name, path):
+        if name in visiting:
+            cycle = path[path.index(name):] + [name] if name in path else path + [name]
+            text = " -> ".join(cycle)
+            add_diagnostic(name, "invalid_rule", name, text, evidence="dependency cycle")
+            return
+        if name in visited:
+            return
+        visiting.add(name)
+        for dep in rules.get(name, []):
+            dep_name = dep.get("name") if isinstance(dep, dict) else None
+            if not dep_name:
+                add_diagnostic(name, "invalid_rule", name, name, evidence="dependency name missing")
+                continue
+            visit(dep_name, path + [name])
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in rules:
+        visit(name, [])
+
+    def check_dependencies(consumer, current, path, trail):
+        for dep in rules.get(current, []):
+            dep_name = dep.get("name") if isinstance(dep, dict) else None
+            if not dep_name:
+                continue
+            chain_names = path + [dep_name]
+            chain = " -> ".join(chain_names)
+            if dep_name in trail:
+                # The validation pass already emits the actionable cycle diagnostic.
+                continue
+            state = states[dep_name]
+            constraint_parts = []
+            minimum, maximum = dep.get("min_version"), dep.get("max_version")
+            if ((minimum is not None and not vtuple(str(minimum))) or
+                    (maximum is not None and not vtuple(str(maximum)))):
+                add_diagnostic(consumer, "invalid_rule", consumer, chain,
+                               evidence="invalid version constraint")
+                continue
+            if minimum:
+                minimum = str(minimum)
+                constraint_parts.append(f">= {minimum}")
+            if maximum:
+                maximum = str(maximum)
+                constraint_parts.append(f"<= {maximum}")
+            constraint = ", ".join(constraint_parts)
+            reason = None
+            if state.status in ("not_detected", "load_failed", "insufficient_data"):
+                reason = state.status
+            elif state.version and minimum and _version_cmp(state.version, minimum) < 0:
+                reason = "incompatible"
+            elif state.version and maximum and _version_cmp(state.version, maximum) > 0:
+                reason = "incompatible"
+            if reason:
+                confidence = "log" if reason == "load_failed" else "rule"
+                add_diagnostic(dep_name, reason, consumer, chain, constraint,
+                               state.evidence, confidence)
+            else:
+                check_dependencies(consumer, dep_name, chain_names, trail | {dep_name})
+
+    for consumer in rules:
+        # An absent optional consumer does not make its dependencies required.
+        if states[consumer].status == "not_detected":
+            continue
+        check_dependencies(consumer, consumer, [consumer], {consumer})
+
+    return FrameworkChainResult(states, list(diagnostics_by_key.values()))
+
+
+def chain_diagnostic_text(diag, localized=True):
+    if localized:
+        reason = T("chain_" + diag.reason)
+        confidence = T("chain_conf_" + diag.confidence)
+    else:
+        reason = diag.reason.replace("_", " ")
+        confidence = {"log": "confirmed by log", "rule": "built-in rule",
+                      "inference": "possible cause"}.get(diag.confidence, diag.confidence)
+    chains = "; ".join(chain.replace(" -> ", " → ") for chain in diag.chains)
+    constraint = f" ({diag.constraint})" if diag.constraint else ""
+    return f"{chains} ✕ — {diag.root}: {reason}{constraint} [{confidence}]"
+
+
 def scan(instance_dir, game_dir, recent_only=False):
     res = ScanResult()
     cfg = load_config()
     res.recommended = {**DEFAULT_RECOMMENDED, **(cfg.get("recommended") or {})}
+    dependency_rules = _merged_dependency_rules(cfg.get("framework_dependencies"))
     res.roots = collect_scan_dirs(instance_dir, game_dir)
 
     _seen_paths: set = set()
@@ -612,11 +860,15 @@ def scan(instance_dir, game_dir, recent_only=False):
     raw = {}
     seen: set = set()
     conflict_seen: set = set()
+    loaded_frameworks: set = set()
     for path, mt in log_paths:
         res.scanned_files += 1
         content = read_tail(path)
         low_path = path.replace("\\", "/").lower()
         is_redscript_log = "redscript" in os.path.basename(path).lower() or "/r6/logs/" in low_path
+        for name, pat in FRAMEWORK_LOAD_PATTERNS.items():
+            if pat.search(content):
+                loaded_frameworks.add(name)
         for name, pat in VERSION_PATTERNS:
             if name not in res.versions:
                 m = pat.search(content)
@@ -639,6 +891,8 @@ def scan(instance_dir, game_dir, recent_only=False):
                 sev = "ERROR"
             elif EXPLICIT_WARN_RE.search(line):
                 sev = "WARN"
+            elif SUCCESS_RE.search(line):
+                continue
             elif ERROR_RE.search(line) and not NOISE_RE.search(line):
                 sev = "ERROR"
             elif WARN_RE.search(line):
@@ -676,6 +930,34 @@ def scan(instance_dir, game_dir, recent_only=False):
     findings.sort(key=lambda f: (not f.is_load_fail, f.severity != "ERROR", -f.count))
     res.findings = findings
     res.load_fails = [f for f in findings if f.is_load_fail]
+    chain_result = evaluate_framework_chains(
+        res.versions, findings, dependency_rules, loaded_frameworks, res.recommended)
+    res.framework_states = chain_result.states
+    res.chain_diagnostics = chain_result.diagnostics
+
+    # Link a failing mod to a broken framework only when its source path identifies
+    # the framework. This avoids guessing arbitrary mod requirements.
+    linked = {(d.root, d.reason, tuple(d.affected)) for d in res.chain_diagnostics}
+    for f in findings:
+        if f.severity != "ERROR" or f.cosmetic:
+            continue
+        dep = None
+        mod = None
+        if f.source.startswith("CET: "):
+            dep, mod = "Cyber Engine Tweaks", f.source[5:]
+        elif f.source.startswith("redscript: "):
+            dep, mod = "redscript", f.source[11:]
+        state = res.framework_states.get(dep) if dep else None
+        if not mod or not state or state.status not in (
+                "not_detected", "load_failed", "incompatible", "insufficient_data"):
+            continue
+        key = (dep, state.status, (mod,))
+        if key in linked:
+            continue
+        res.chain_diagnostics.append(ChainDiagnostic(
+            dep, state.status, [mod], [f"{mod} -> {dep}"], evidence=f.text,
+            confidence="log"))
+        linked.add(key)
     # конфликты (перезаписи) выше ошибок компиляции; затем по системе и моду
     res.conflicts.sort(key=lambda c: (c.kind != "conflict", c.system, c.mod))
 
@@ -727,6 +1009,16 @@ def build_report(res, instance, game, include_raw=True):
             L.append(f"  [OUTDATED?] {name}: {inst} (reference >= {res.recommended.get(name)})")
         else:
             L.append(f"  [OK] {name}: {inst}")
+    L.append("")
+
+    L.append("--- FRAMEWORK DEPENDENCY CHAINS ---")
+    if not res.chain_diagnostics:
+        L.append("  [OK] No breaks in detected dependency chains.")
+    else:
+        for diag in res.chain_diagnostics:
+            L.append("  [CHAIN] " + chain_diagnostic_text(diag, localized=False))
+            if diag.evidence:
+                L.append("    evidence: " + diag.evidence.strip()[:500])
     L.append("")
 
     if res.problems:
@@ -1107,7 +1399,12 @@ def run_gui():
             for name in CORE_FRAMEWORKS:
                 st = version_status(res.versions.get(name), res.recommended.get(name))
                 inst = res.versions.get(name)
-                if st == "unknown":
+                fw_state = res.framework_states.get(name)
+                if fw_state and fw_state.status == "load_failed":
+                    mark, txt, tag = "✕", T("chain_load_failed"), "bad"
+                elif fw_state and fw_state.status == "insufficient_data":
+                    mark, txt, tag = "?", T("chain_insufficient_data"), "warn"
+                elif st == "unknown":
                     mark, txt, tag = "?", T("not_detected"), "bad"
                 elif st == "old":
                     mark, txt, tag = "⚠", f"{inst}  ({T('guide_ge')} {res.recommended.get(name)})", "warn"
@@ -1116,6 +1413,12 @@ def run_gui():
                 comp_text.insert("end", f"\n  {mark} {name}: ")
                 comp_text.insert("end", txt + "\n", tag)
             comp_text.insert("end", T("comp_note"), "warn")
+            comp_text.insert("end", "\n" + T("chain_h") + "\n", "h")
+            if not res.chain_diagnostics:
+                comp_text.insert("end", T("chain_ok"), "ok")
+            else:
+                for diag in res.chain_diagnostics:
+                    comp_text.insert("end", "  " + chain_diagnostic_text(diag) + "\n", "bad")
             vortex_path = detect_vortex_dir()
             comp_text.insert("end", "\n\n" + T("vortex_status") + "  ")
             if vortex_path:

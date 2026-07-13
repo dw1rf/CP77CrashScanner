@@ -14,6 +14,7 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 - **Crash cause detection** — shows the specific mod(s) responsible, not generic hints
 - **r6 conflict detection** *(new in 1.2)* — parses `redscript`, `TweakXL` and `ArchiveXL` logs to name mods that overwrite each other's methods/records or reference missing code
 - **Framework version check** — RED4ext, CET, ArchiveXL, TweakXL, Codeware, redscript
+- **Framework dependency chains** — finds the first missing, failed or incompatible link instead of checking each framework in isolation
 - **Failed-to-load tab** — ready-to-share list of incompatible mods
 - **Vortex support** — auto-detected, no extra configuration needed
 - **Bilingual UI** — Russian / English, switchable at runtime
@@ -98,11 +99,19 @@ Settings are auto-saved to `scanner_config.json` next to the `.exe`:
   "recommended": {
     "RED4ext": "1.27.0",
     "Cyber Engine Tweaks": "1.35.0"
+  },
+  "framework_dependencies": {
+    "ArchiveXL": [
+      {"name": "RED4ext", "min_version": "1.27.0"},
+      {"name": "redscript", "min_version": "0.5.27"}
+    ]
   }
 }
 ```
 
-Edit the `recommended` block to pin versions for your specific game patch.
+Edit `recommended` to pin versions for your game patch. A component entry in
+`framework_dependencies` replaces its built-in dependency list; rules support
+`min_version` and optional `max_version`.
 
 ## Building from source
 
@@ -116,7 +125,7 @@ build_windows.bat
 ```
 
 Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
-Release ZIP: `dist\CP77CrashScanner_v1.3.1.zip`
+Release ZIP: `dist\CP77CrashScanner_v1.4.0.zip`
 
 **Note on antivirus detections:** Release builds use Nuitka standalone mode — no PyInstaller bootloader, UPX compression, obfuscation, or self-extracting installer. Full source code and SHA-256 checksums are included for review. An unsigned executable can still trigger reputation-based warnings; report any false positive to the relevant antivirus vendor.
 
