@@ -6,10 +6,12 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 [![Latest release](https://img.shields.io/github/v/release/dw1rf/CP77CrashScanner?style=for-the-badge&color=9c42ef)](https://github.com/dw1rf/CP77CrashScanner/releases/latest)
 [![Download](https://img.shields.io/github/downloads/dw1rf/CP77CrashScanner/total?style=for-the-badge&color=6f2bd9)](https://github.com/dw1rf/CP77CrashScanner/releases)
 
+
+[![Latest Releases](https://github.com/dw1rf/CP77CrashScanner/releases/latest)
 > Also available on **[Nexus Mods](https://www.nexusmods.com/cyberpunk2077/mods/30924)**
-https://github.com/dw1rf/CP77CrashScanner/releases/latest
+
 ---
-https://github.com/dw1rf/CP77CrashScanner/releases/latest
+
 ## Features
 
 - **Auto-scan** on startup if MO2 instance is configured
