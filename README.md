@@ -2,12 +2,12 @@
 
 A desktop tool for diagnosing crashes and mod conflicts in **Cyberpunk 2077**.  
 Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, detects framework versions, and generates a portable crash report.
-
-> **[Download latest release →](https://github.com/dw1rf/CP77CrashScanner/releases/latest)**  
+[![Latest release](https://img.shields.io/github/v/release/dw1rf/CrashScanner?style=for-the-badge&color=9c42ef)](https://github.com/dw1rf/CP77CrashScanner/releases/latest))
+[![Downloads](https://img.shields.io/github/downloads/dw1rf/CrashScanner/total?style=for-the-badge&color=6f2bd9)](https://github.com/dw1rf/CP77CrashScanner/releases)
 > Also available on **[Nexus Mods](https://www.nexusmods.com/cyberpunk2077/mods/30924)**
-
+https://github.com/dw1rf/CP77CrashScanner/releases/latest
 ---
-
+https://github.com/dw1rf/CP77CrashScanner/releases/latest
 ## Features
 
 - **Auto-scan** on startup if MO2 instance is configured
