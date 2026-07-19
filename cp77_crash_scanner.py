@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dw1rf
 """
 CP77 Crash Scanner — desktop log & compatibility scanner for
 Cyberpunk 2077 (Mod Organizer 2). Bilingual UI (RU/EN).
@@ -9,7 +11,7 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 import os
 import re
@@ -51,8 +53,12 @@ SUCCESS_RE = re.compile(
 # Explicit log-level tags take priority over heuristic regex (e.g. "[warning] Type mismatch" → WARN, not ERROR)
 EXPLICIT_ERROR_RE = re.compile(r"\[(error|fatal|critical)\b", re.IGNORECASE)
 EXPLICIT_WARN_RE  = re.compile(r"\[(warn(?:ing)?)\b", re.IGNORECASE)
+EXPLICIT_INFO_RE = re.compile(r"\[(?:info|debug|trace|verbose)\b", re.IGNORECASE)
 REDSCRIPT_LOCATION_HEADER_RE = re.compile(
     r"\[(?:error|fatal|critical|warn(?:ing)?)[^\]]*\]\s+At\s+.*\.reds:\d+:\d+:\s*$",
+    re.IGNORECASE)
+REDSCRIPT_INVENTORY_RE = re.compile(
+    r'^\s*"?(?:[A-Za-z]:[\\/])?[^:\r\n]*[\\/][^:\r\n]*\.reds"?\s*$',
     re.IGNORECASE)
 
 COSMETIC_RE = re.compile(
@@ -139,6 +145,24 @@ TR = {
     "only_recent": {"ru": "Только последняя сессия (±2ч)", "en": "Only last session (±2h)"},
     "hide_cos": {"ru": "Скрывать косметику", "en": "Hide cosmetic"},
     "embed_raw": {"ru": "Вкладывать сырые логи в отчёт", "en": "Embed raw logs in report"},
+    "exclusions": {"ru": "Исключения…", "en": "Exclusions…"},
+    "excl_title": {"ru": "Пользовательские исключения", "en": "Custom exclusions"},
+    "excl_help": {
+        "ru": "Одно правило на строку. Поиск буквальный, без regex, регистр не учитывается. "
+              "Исключения убирают диагностику, но не изменяют исходные RAW-логи.",
+        "en": "One rule per line. Matching is literal, without regex, and case-insensitive. "
+              "Exclusions remove diagnostics but do not modify embedded RAW logs."},
+    "excl_sources": {"ru": "Моды / источники", "en": "Mods / sources"},
+    "excl_sources_help": {
+        "ru": "Совпадение здесь скрывает все диагностики подходящего источника.",
+        "en": "A match here hides every diagnostic from the matching source."},
+    "excl_phrases": {"ru": "Слова / фразы в сообщении", "en": "Words / phrases in message"},
+    "excl_save": {"ru": "Сохранить", "en": "Save"},
+    "cancel": {"ru": "Отмена", "en": "Cancel"},
+    "config_save_err": {"ru": "Не удалось сохранить scanner_config.json.",
+                        "en": "Could not save scanner_config.json."},
+    "excl_saved": {"ru": "Исключения сохранены: {} правил.",
+                   "en": "Exclusions saved: {} rules."},
     "scan": {"ru": "🔍  СКАНИРОВАТЬ", "en": "🔍  SCAN"},
     "export": {"ru": "📄  ОТЧЁТ В 1 ФАЙЛ", "en": "📄  REPORT TO 1 FILE"},
     "purge": {"ru": "🗑  Очистить логи", "en": "🗑  Purge logs"},
@@ -190,8 +214,10 @@ TR = {
     "lf_hint": {"ru": "Это готовый отчёт о несовместимых модах: что не загрузилось/не скомпилировалось.",
                 "en": "This is a ready compatibility report: what failed to load / compile."},
     "scanning": {"ru": "Сканирую…", "en": "Scanning…"},
-    "scan_done": {"ru": "Готово: {} логов · {} видов ошибок ({}×) · не загрузилось: {} · дампов: {}",
-                  "en": "Done: {} logs · {} error types ({}×) · failed to load: {} · dumps: {}"},
+    "scan_done": {"ru": "Готово: {} логов · {} видов ошибок ({}×) · не загрузилось: {} · "
+                             "исключено: {} (правил: {}) · дампов: {}",
+                  "en": "Done: {} logs · {} error types ({}×) · failed to load: {} · "
+                             "excluded: {} (rules: {}) · dumps: {}"},
     "scan_err": {"ru": "Ошибка: {}", "en": "Error: {}"},
     "scan_err_t": {"ru": "Ошибка сканирования", "en": "Scan error"},
     "exp_need_scan": {"ru": "Сначала нажми «Сканировать».", "en": "Press “Scan” first."},
@@ -211,6 +237,8 @@ TR = {
     "sum_warn": {"ru": "Предупреждений: ", "en": "Warnings: "},
     "sum_cos": {"ru": "Косметика (декали/материалы): {} видов / {} всего {}\n",
                 "en": "Cosmetic (decals/materials): {} types / {} total {}\n"},
+    "sum_exclusions": {"ru": "Пользовательские исключения: {} правил / {} подавлено\n",
+                       "en": "Custom exclusions: {} rules / {} suppressed\n"},
     "hidden": {"ru": "[скрыта]", "en": "[hidden]"},
     "sum_lf": {"ru": "Не загрузилось/не скомпилировалось: ", "en": "Failed to load/compile: "},
     "sum_dmp": {"ru": "Крэш-дампов: {}\n", "en": "Crash dumps: {}\n"},
@@ -362,6 +390,9 @@ class ScanResult:
         self.err_unique = self.err_occ = 0
         self.warn_unique = self.warn_occ = 0
         self.cosmetic_unique = self.cosmetic_occ = 0
+        self.exclusions = {"sources": [], "phrases": []}
+        self.active_exclusion_rules = 0
+        self.excluded_count = 0
 
 
 # --- утилиты ------------------------------------------------------------------
@@ -369,18 +400,68 @@ def load_config():
     if os.path.isfile(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                cfg = json.load(f)
+                return cfg if isinstance(cfg, dict) else {}
         except Exception:
             pass
     return {}
 
 
 def save_config(cfg):
+    if not isinstance(cfg, dict):
+        return False
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
     except Exception:
-        pass
+        return False
+
+
+def _normalize_exclusion_list(values):
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    seen = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        folded = value.casefold()
+        if not value or folded in seen:
+            continue
+        seen.add(folded)
+        normalized.append(value)
+    return normalized
+
+
+def normalize_exclusions(value):
+    """Return safe, ordered literal exclusion rules from an arbitrary config value."""
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        "sources": _normalize_exclusion_list(value.get("sources")),
+        "phrases": _normalize_exclusion_list(value.get("phrases")),
+    }
+
+
+def _matches_exclusion(rules, *values):
+    if not rules:
+        return False
+    haystacks = [value.casefold() for value in values if isinstance(value, str) and value]
+    return any(rule.casefold() in haystack for rule in rules for haystack in haystacks)
+
+
+def _finding_is_excluded(exclusions, source, path, line):
+    return (_matches_exclusion(exclusions["sources"], source, path)
+            or _matches_exclusion(exclusions["phrases"], line))
+
+
+def _conflict_is_excluded(exclusions, conflict):
+    return (_matches_exclusion(
+                exclusions["sources"], conflict.mod, conflict.system, conflict.path)
+            or _matches_exclusion(
+                exclusions["phrases"], conflict.target, conflict.message))
 
 
 def parse_game_path(instance_dir):
@@ -817,8 +898,12 @@ def chain_diagnostic_text(diag, localized=True):
 def scan(instance_dir, game_dir, recent_only=False):
     res = ScanResult()
     cfg = load_config()
+    if not isinstance(cfg, dict):
+        cfg = {}
     res.recommended = {**DEFAULT_RECOMMENDED, **(cfg.get("recommended") or {})}
     dependency_rules = _merged_dependency_rules(cfg.get("framework_dependencies"))
+    res.exclusions = normalize_exclusions(cfg.get("exclusions"))
+    res.active_exclusion_rules = sum(len(values) for values in res.exclusions.values())
     res.roots = collect_scan_dirs(instance_dir, game_dir)
 
     _seen_paths: set = set()
@@ -875,6 +960,9 @@ def scan(instance_dir, game_dir, recent_only=False):
                 if m:
                     res.versions[name] = m.group(1)
         for c in extract_conflicts(path, content):
+            if _conflict_is_excluded(res.exclusions, c):
+                res.excluded_count += 1
+                continue
             ckey = (c.mod, c.system, c.target, norm_text(c.message))
             if ckey not in conflict_seen:
                 conflict_seen.add(ckey)
@@ -884,13 +972,17 @@ def scan(instance_dir, game_dir, recent_only=False):
                 continue
             if is_redscript_log and REDSCRIPT_LOCATION_HEADER_RE.search(line):
                 continue
+            if is_redscript_log and REDSCRIPT_INVENTORY_RE.fullmatch(line):
+                continue
             sev = None
-            # Explicit [error]/[warning] tags in the log format take priority over heuristic regexes.
-            # This prevents e.g. "[warning] Type mismatch..." from being mis-classified as ERROR.
+            # Explicit levels take priority over keyword heuristics. Informational lines may
+            # legitimately contain words such as "crash" in a mod name or diagnostic label.
             if EXPLICIT_ERROR_RE.search(line) and not NOISE_RE.search(line):
                 sev = "ERROR"
             elif EXPLICIT_WARN_RE.search(line):
                 sev = "WARN"
+            elif EXPLICIT_INFO_RE.search(line):
+                continue
             elif SUCCESS_RE.search(line):
                 continue
             elif ERROR_RE.search(line) and not NOISE_RE.search(line):
@@ -901,6 +993,9 @@ def scan(instance_dir, game_dir, recent_only=False):
                 continue
             cosmetic = bool(COSMETIC_RE.search(line))
             src = source_for(path, line)
+            if _finding_is_excluded(res.exclusions, src, path, line):
+                res.excluded_count += 1
+                continue
             key = (sev, src, norm_text(line))
             f = raw.get(key)
             if f:
@@ -996,6 +1091,8 @@ def build_report(res, instance, game, include_raw=True):
           f"Logs scanned: {res.scanned_files}",
           f"Significant errors: {res.err_unique} types / {res.err_occ} total",
           f"Cosmetic: {res.cosmetic_unique} types / {res.cosmetic_occ} total",
+          f"Active custom exclusion rules: {res.active_exclusion_rules}",
+          f"Excluded by custom rules: {res.excluded_count}",
           f"Failed to load/compile: {len(res.load_fails)}",
           f"Crash dumps: {len(res.dumps)}", ""]
 
@@ -1091,6 +1188,7 @@ def run_cli():
     print(f"\nLogs: {res.scanned_files} | dumps: {len(res.dumps)}")
     print(f"Significant errors: {res.err_unique} types / {res.err_occ} total")
     print(f"Cosmetic (hidden): {res.cosmetic_unique} types / {res.cosmetic_occ} total")
+    print(f"Custom exclusions: {res.active_exclusion_rules} rules / {res.excluded_count} suppressed")
     print(f"Versions: {res.versions}")
     print("\nTOP sources by errors:")
     for src, a in sorted(res.by_source.items(), key=lambda kv: -kv[1]["err_o"])[:10]:
@@ -1127,7 +1225,7 @@ def run_gui():
 
     global CURRENT_LANG
     BG = "#1e1f22"; FG = "#e6e6e6"; ACC = "#4cc38a"; ERRC = "#ff6b6b"; WARNC = "#ffd166"; PANEL = "#2b2d31"
-    GITHUB_URL = "https://github.com/dw1rf"
+    GITHUB_URL = "https://github.com/dw1rf/CP77CrashScanner"
 
     cfg = load_config()
     CURRENT_LANG = cfg.get("lang", "ru")
@@ -1233,6 +1331,8 @@ def run_gui():
         ttk.Checkbutton(optrow, text=T("hide_cos"), variable=hide_cos_var,
                         command=lambda: state["result"] and holder["render"](state["result"])).pack(side="left", padx=(16, 0))
         ttk.Checkbutton(optrow, text=T("embed_raw"), variable=incl_raw_var).pack(side="left", padx=(16, 0))
+        ttk.Button(optrow, text=T("exclusions"),
+                   command=lambda: holder["open_exclusions"]()).pack(side="left", padx=(16, 0))
 
         nb = ttk.Notebook(root); nb.pack(fill="both", expand=True, padx=10, pady=(0, 4))
 
@@ -1328,6 +1428,8 @@ def run_gui():
             sum_text.insert("end", T("sum_types_total", res.warn_unique, res.warn_occ), "warn")
             sum_text.insert("end", T("sum_cos", res.cosmetic_unique, res.cosmetic_occ,
                                      T("hidden") if hide_cos else ""))
+            sum_text.insert("end", T("sum_exclusions", res.active_exclusion_rules,
+                                     res.excluded_count), "warn" if res.excluded_count else "ok")
             sum_text.insert("end", T("sum_lf"))
             sum_text.insert("end", f"{len(res.load_fails)}\n", "err" if res.load_fails else "ok")
             sum_text.insert("end", T("sum_conf"))
@@ -1459,7 +1561,8 @@ def run_gui():
                     def done():
                         render(res)
                         status_var.set(T("scan_done", res.scanned_files, res.err_unique,
-                                         res.err_occ, len(res.load_fails), len(res.dumps)))
+                                         res.err_occ, len(res.load_fails), res.excluded_count,
+                                         res.active_exclusion_rules, len(res.dumps)))
                         scan_btn.config(state="normal")
                     root.after(0, done)
                 except Exception as e:
@@ -1468,6 +1571,65 @@ def run_gui():
                                            scan_btn.config(state="normal"),
                                            messagebox.showerror(T("scan_err_t"), msg)))
             threading.Thread(target=worker, daemon=True).start()
+
+        def open_exclusions():
+            current = normalize_exclusions(load_config().get("exclusions"))
+            dialog = tk.Toplevel(root)
+            dialog.title(T("excl_title"))
+            dialog.geometry("720x520")
+            dialog.minsize(560, 430)
+            dialog.transient(root)
+            dialog.grab_set()
+            dialog.configure(bg=BG)
+
+            body = ttk.Frame(dialog, padding=14)
+            body.pack(fill="both", expand=True)
+            ttk.Label(body, text=T("excl_help"), wraplength=680,
+                      justify="left").pack(fill="x", pady=(0, 12))
+
+            source_frame = ttk.LabelFrame(body, text=T("excl_sources"), padding=8)
+            source_frame.pack(fill="both", expand=True)
+            ttk.Label(source_frame, text=T("excl_sources_help"), wraplength=650,
+                      justify="left").pack(fill="x", pady=(0, 6))
+            source_text = tk.Text(source_frame, height=7, bg=PANEL, fg=FG,
+                                  insertbackground=FG, relief="flat", undo=True)
+            source_text.pack(fill="both", expand=True)
+            source_text.insert("1.0", "\n".join(current["sources"]))
+
+            phrase_frame = ttk.LabelFrame(body, text=T("excl_phrases"), padding=8)
+            phrase_frame.pack(fill="both", expand=True, pady=(12, 0))
+            phrase_text = tk.Text(phrase_frame, height=7, bg=PANEL, fg=FG,
+                                  insertbackground=FG, relief="flat", undo=True)
+            phrase_text.pack(fill="both", expand=True)
+            phrase_text.insert("1.0", "\n".join(current["phrases"]))
+
+            buttons = ttk.Frame(body)
+            buttons.pack(fill="x", pady=(12, 0))
+
+            def save_exclusions():
+                exclusions = normalize_exclusions({
+                    "sources": source_text.get("1.0", "end-1c").splitlines(),
+                    "phrases": phrase_text.get("1.0", "end-1c").splitlines(),
+                })
+                config = load_config()
+                config["exclusions"] = exclusions
+                if not save_config(config):
+                    messagebox.showerror(T("excl_title"), T("config_save_err"), parent=dialog)
+                    return
+                count = sum(len(values) for values in exclusions.values())
+                dialog.destroy()
+                if state["result"]:
+                    do_scan()
+                else:
+                    status_var.set(T("excl_saved", count))
+
+            ttk.Button(buttons, text=T("cancel"), command=dialog.destroy).pack(side="right")
+            ttk.Button(buttons, text=T("excl_save"), command=save_exclusions).pack(side="right", padx=(0, 8))
+            dialog.bind("<Escape>", lambda _e: dialog.destroy())
+            dialog.bind("<Control-Return>", lambda _e: save_exclusions())
+            source_text.focus_set()
+
+        holder["open_exclusions"] = open_exclusions
 
         def do_export():
             res = state["result"]
@@ -1561,7 +1723,8 @@ def _auto_scan(state, inst_var, game_var, recent_var, holder, root, status_var):
             state["result"] = res
             root.after(0, lambda: (holder["render"](res),
                                    status_var.set(T("scan_done", res.scanned_files, res.err_unique,
-                                                    res.err_occ, len(res.load_fails), len(res.dumps)))))
+                                                    res.err_occ, len(res.load_fails), res.excluded_count,
+                                                    res.active_exclusion_rules, len(res.dumps)))))
         except Exception as e:
             root.after(0, lambda: status_var.set(T("scan_err", str(e))))
     threading.Thread(target=worker, daemon=True).start()

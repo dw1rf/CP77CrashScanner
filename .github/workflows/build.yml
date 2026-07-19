@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dw1rf
+
 name: Build CP77 Crash Scanner
 
 on:
@@ -62,7 +65,7 @@ jobs:
             --file-version="$version.0" `
             --product-version="$version.0" `
             --file-description="Cyberpunk 2077 crash log and mod compatibility scanner" `
-            --copyright="Copyright (c) dw1rf" `
+            --copyright="Copyright (C) 2026 dw1rf" `
             cp77_crash_scanner.py
           if ($LASTEXITCODE -ne 0) { throw "Nuitka build failed with exit code $LASTEXITCODE" }
 
@@ -110,6 +113,7 @@ jobs:
           $package = (Resolve-Path dist\CP77CrashScanner).Path
           Copy-Item README.md $package
           Copy-Item README_RU.md $package
+          Copy-Item LICENSE $package
 
           Get-ChildItem -Recurse -File $package |
             Where-Object Name -ne 'SHA256SUMS.txt' |
@@ -142,15 +146,29 @@ jobs:
             -Path dist\CP77CrashScanner `
             -DestinationPath "dist\CP77CrashScanner_v$version.zip"
 
+          $sourceItems = @(
+            'cp77_crash_scanner.py', 'tests/test_scanner.py', 'requirements.txt', 'version.txt',
+            'file_version_info.txt', 'CP77CrashScanner.spec', 'build_windows.bat',
+            'build_nuitka.bat', 'README.md', 'README_RU.md', 'LICENSE',
+            '.github/workflows/build.yml'
+          )
+          Compress-Archive -Force `
+            -Path $sourceItems `
+            -DestinationPath "dist\CP77CrashScanner_v${version}_source.zip"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: CP77CrashScanner_v${{ steps.version.outputs.version }}
-          path: dist/CP77CrashScanner_v${{ steps.version.outputs.version }}.zip
+          path: |
+            dist/CP77CrashScanner_v${{ steps.version.outputs.version }}.zip
+            dist/CP77CrashScanner_v${{ steps.version.outputs.version }}_source.zip
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CP77CrashScanner_v${{ steps.version.outputs.version }}.zip
+          files: |
+            dist/CP77CrashScanner_v${{ steps.version.outputs.version }}.zip
+            dist/CP77CrashScanner_v${{ steps.version.outputs.version }}_source.zip
           generate_release_notes: true

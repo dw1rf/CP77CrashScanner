@@ -1,4 +1,6 @@
 @echo off
+REM SPDX-License-Identifier: GPL-3.0-only
+REM Copyright (C) 2026 dw1rf
 setlocal
 chcp 65001 > nul
 echo ============================================
@@ -11,15 +13,15 @@ if "%VERSION%"=="" (
     exit /b 1
 )
 
-echo [1/4] Running regression tests...
+echo [1/5] Running regression tests...
 python -m unittest discover -s tests -v
 if errorlevel 1 exit /b 1
 
-echo [2/4] Building Nuitka standalone application...
+echo [2/5] Building Nuitka standalone application...
 call build_nuitka.bat
 if errorlevel 1 exit /b 1
 
-echo [3/4] Preparing package and SHA256SUMS.txt...
+echo [3/5] Preparing package and SHA256SUMS.txt...
 if exist dist\CP77CrashScanner rmdir /s /q dist\CP77CrashScanner
 mkdir dist\CP77CrashScanner
 xcopy /e /i /q /y dist_nuitka\cp77_crash_scanner.dist\* dist\CP77CrashScanner\ > nul
@@ -29,6 +31,7 @@ if errorlevel 1 (
 )
 copy /y README.md dist\CP77CrashScanner\ > nul
 copy /y README_RU.md dist\CP77CrashScanner\ > nul
+copy /y LICENSE dist\CP77CrashScanner\ > nul
 
 powershell -NoProfile -Command ^
   "$package = (Resolve-Path 'dist\CP77CrashScanner').Path;" ^
@@ -39,7 +42,7 @@ powershell -NoProfile -Command ^
   "} | Set-Content -Encoding utf8 (Join-Path $package 'SHA256SUMS.txt')"
 if errorlevel 1 exit /b 1
 
-echo [4/4] Verifying checksums and creating ZIP...
+echo [4/5] Verifying checksums and creating binary ZIP...
 if exist dist\CP77CrashScanner_v%VERSION%.zip del /q dist\CP77CrashScanner_v%VERSION%.zip
 powershell -NoProfile -Command ^
   "$package = (Resolve-Path 'dist\CP77CrashScanner').Path;" ^
@@ -52,10 +55,23 @@ powershell -NoProfile -Command ^
   "Compress-Archive -Force -Path 'dist\CP77CrashScanner' -DestinationPath 'dist\CP77CrashScanner_v%VERSION%.zip'"
 if errorlevel 1 exit /b 1
 
+echo [5/5] Creating corresponding source ZIP...
+if exist dist\CP77CrashScanner_v%VERSION%_source.zip del /q dist\CP77CrashScanner_v%VERSION%_source.zip
+powershell -NoProfile -Command ^
+  "$sourceItems = @(" ^
+  "  'cp77_crash_scanner.py', 'tests\test_scanner.py', 'requirements.txt', 'version.txt'," ^
+  "  'file_version_info.txt', 'CP77CrashScanner.spec', 'build_windows.bat'," ^
+  "  'build_nuitka.bat', 'README.md', 'README_RU.md', 'LICENSE'," ^
+  "  '.github\workflows\build.yml'" ^
+  ");" ^
+  "Compress-Archive -Force -Path $sourceItems -DestinationPath 'dist\CP77CrashScanner_v%VERSION%_source.zip'"
+if errorlevel 1 exit /b 1
+
 echo.
 echo ============================================
 echo  Build complete
 echo  EXE: dist\CP77CrashScanner\CP77CrashScanner.exe
-echo  ZIP: dist\CP77CrashScanner_v%VERSION%.zip
+echo  BIN: dist\CP77CrashScanner_v%VERSION%.zip
+echo  SRC: dist\CP77CrashScanner_v%VERSION%_source.zip
 echo ============================================
 endlocal

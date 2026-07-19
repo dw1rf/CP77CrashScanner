@@ -1,4 +1,6 @@
 ﻿@echo off
+REM SPDX-License-Identifier: GPL-3.0-only
+REM Copyright (C) 2026 dw1rf
 chcp 65001 > nul
 echo ============================================
 echo  CP77 Crash Scanner - Nuitka onedir build
@@ -43,7 +45,7 @@ python -m nuitka ^
   --file-version=%VERSION%.0 ^
   --product-version=%VERSION%.0 ^
   --file-description="Cyberpunk 2077 crash log and mod compatibility scanner" ^
-  --copyright="Copyright (c) dw1rf" ^
+  --copyright="Copyright (C) 2026 dw1rf" ^
   cp77_crash_scanner.py
 if errorlevel 1 (
     echo ERROR: Nuitka build failed

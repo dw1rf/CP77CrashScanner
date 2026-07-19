@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 dw1rf
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,14 +10,15 @@ import cp77_crash_scanner as scanner
 
 
 class LogClassificationRegressionTests(unittest.TestCase):
-    def scan_log(self, relative_path, content):
+    def scan_log(self, relative_path, content, config=None):
         with tempfile.TemporaryDirectory() as tmp:
             game_dir = Path(tmp)
             log_path = game_dir / relative_path
             log_path.parent.mkdir(parents=True)
             log_path.write_text(content, encoding="utf-8")
 
-            with mock.patch.object(scanner, "detect_vortex_dir", return_value=None):
+            with mock.patch.object(scanner, "detect_vortex_dir", return_value=None), \
+                    mock.patch.object(scanner, "load_config", return_value=config or {}):
                 return scanner.scan("", str(game_dir))
 
     def test_audioware_negative_status_is_not_an_error(self):
@@ -79,6 +83,168 @@ this method replacement overwrites a previous annotation targeting the same meth
         )
 
         self.assertEqual(1, len(result.findings))
+
+    def test_explicit_non_problem_levels_do_not_run_keyword_heuristics(self):
+        result = self.scan_log(
+            Path("red4ext/logs/plugin.log"),
+            """[info] Loading Better Crash Collection
+[debug] missing vehicle lookup is expected
+[trace] deprecated error callback registered
+""",
+        )
+
+        self.assertEqual([], result.findings)
+
+    def test_redscript_inventory_path_with_crash_name_is_not_a_finding(self):
+        result = self.scan_log(
+            Path("r6/logs/redscript_rCURRENT.log"),
+            "C:\\Game\\r6\\scripts\\Better Crash Collection\\main.reds\n",
+        )
+
+        self.assertEqual([], result.findings)
+
+    def test_untagged_crash_message_remains_an_error(self):
+        result = self.scan_log(
+            Path("red4ext/logs/plugin.log"),
+            "Game crash detected while loading world\n",
+        )
+
+        self.assertEqual(1, len(result.findings))
+        self.assertEqual("ERROR", result.findings[0].severity)
+
+
+class ExclusionTests(unittest.TestCase):
+    def scan_log(self, relative_path, content, config=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            log_path = game_dir / relative_path
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text(content, encoding="utf-8")
+
+            with mock.patch.object(scanner, "detect_vortex_dir", return_value=None), \
+                    mock.patch.object(scanner, "load_config", return_value=config or {}):
+                return scanner.scan("", str(game_dir))
+
+    def test_normalization_is_literal_trimmed_casefolded_and_ordered(self):
+        exclusions = scanner.normalize_exclusions({
+            "sources": ["  Faction Evolved ", "faction evolved", "", 42, "RED4ext"],
+            "phrases": [" Vehicle.*Missing ", "vehicle.*missing", None],
+        })
+
+        self.assertEqual(["Faction Evolved", "RED4ext"], exclusions["sources"])
+        self.assertEqual(["Vehicle.*Missing"], exclusions["phrases"])
+
+    def test_phrase_exclusion_is_case_insensitive_and_does_not_treat_regex_specially(self):
+        result = self.scan_log(
+            Path("red4ext/logs/plugin.log"),
+            """[error] VEHICLE.*MISSING optional record
+[error] vehicleZZZmissing is a real failure
+""",
+            {"exclusions": {"phrases": ["vehicle.*missing"]}},
+        )
+
+        self.assertEqual(1, len(result.findings))
+        self.assertIn("vehicleZZZmissing", result.findings[0].text)
+        self.assertEqual(1, result.excluded_count)
+        self.assertEqual(1, result.active_exclusion_rules)
+
+    def test_source_exclusion_matches_resolved_source_case_insensitively(self):
+        result = self.scan_log(
+            Path("red4ext/logs/faction-evolved.log"),
+            "[error] failed to find optional vehicle\n",
+            {"exclusions": {"sources": ["RED4EXT: FACTION-EVOLVED"]}},
+        )
+
+        self.assertEqual([], result.findings)
+        self.assertEqual(1, result.excluded_count)
+
+    def test_excluded_finding_does_not_create_framework_chain_evidence(self):
+        result = self.scan_log(
+            Path("bin/x64/cyber_engine_tweaks/mods/NoisyMod/noisy.log"),
+            "[error] failed to load missing_dependency.dll\n",
+            {"exclusions": {"sources": ["noisymod"]}},
+        )
+
+        self.assertEqual([], result.findings)
+        self.assertFalse(any(
+            "NoisyMod" in diagnostic.affected or "missing_dependency" in diagnostic.evidence
+            for diagnostic in result.chain_diagnostics
+        ))
+
+    def test_malformed_exclusions_are_ignored(self):
+        result = self.scan_log(
+            Path("red4ext/logs/plugin.log"),
+            "[error] failed to initialize broken_plugin.dll\n",
+            {"exclusions": "not-an-object"},
+        )
+
+        self.assertEqual(1, len(result.findings))
+        self.assertEqual(0, result.active_exclusion_rules)
+
+    def test_excluded_redscript_conflict_does_not_reappear(self):
+        result = self.scan_log(
+            Path("r6/logs/redscript_rCURRENT.log"),
+            """[WARN] At C:\\Game\\r6\\scripts\\Crash Sorter\\sort.reds:58:1:
+@replaceMethod(RPGManager)
+^^^
+this method replacement overwrites a previous annotation targeting the same method, only one replacement per method can be active at a time
+""",
+            {"exclusions": {"sources": ["crash sorter"]}},
+        )
+
+        self.assertEqual([], result.conflicts)
+        self.assertEqual([], result.findings)
+        self.assertGreaterEqual(result.excluded_count, 1)
+
+    def test_version_and_raw_log_survive_phrase_exclusion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            log_path = game_dir / "red4ext/logs/red4ext.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text(
+                "RED4ext (v1.30.0) is initializing\n[error] harmless optional vehicle missing\n",
+                encoding="utf-8",
+            )
+            config = {"exclusions": {"phrases": ["harmless optional vehicle"]}}
+            with mock.patch.object(scanner, "detect_vortex_dir", return_value=None), \
+                    mock.patch.object(scanner, "load_config", return_value=config):
+                result = scanner.scan("", str(game_dir))
+
+            report = scanner.build_report(result, "", str(game_dir), include_raw=True)
+
+        self.assertEqual("1.30.0", result.versions["RED4ext"])
+        self.assertEqual([], result.findings)
+        self.assertIn("harmless optional vehicle missing", report)
+        self.assertIn("Excluded by custom rules: 1", report)
+
+    def test_save_config_reports_success_and_preserves_unknown_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scanner_config.json"
+            config = {"lang": "en", "custom": {"keep": True}}
+            with mock.patch.object(scanner, "CONFIG_PATH", str(path)):
+                self.assertTrue(scanner.save_config(config))
+                self.assertEqual(config, scanner.load_config())
+
+
+class ReleaseMetadataTests(unittest.TestCase):
+    def test_version_metadata_and_license_are_present(self):
+        root = Path(__file__).resolve().parents[1]
+
+        self.assertEqual(scanner.__version__, (root / "version.txt").read_text().strip())
+        license_text = (root / "LICENSE").read_text(encoding="utf-8")
+        self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)
+        self.assertIn("Version 3, 29 June 2007", license_text)
+
+    def test_release_builds_include_license_and_source_archive(self):
+        root = Path(__file__).resolve().parents[1]
+        local_build = (root / "build_windows.bat").read_text(encoding="utf-8-sig")
+        workflow = (root / ".github/workflows/build.yml").read_text(encoding="utf-8")
+
+        for content in (local_build, workflow):
+            self.assertIn("LICENSE", content)
+            self.assertIn("_source.zip", content)
+        self.assertIn(r"tests\test_scanner.py", local_build)
+        self.assertIn("tests/test_scanner.py", workflow)
 
 
 class FrameworkChainTests(unittest.TestCase):

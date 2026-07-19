@@ -19,6 +19,7 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 - **r6 conflict detection** *(new in 1.2)* — parses `redscript`, `TweakXL` and `ArchiveXL` logs to name mods that overwrite each other's methods/records or reference missing code
 - **Framework version check** — RED4ext, CET, ArchiveXL, TweakXL, Codeware, redscript
 - **Framework dependency chains** — finds the first missing, failed or incompatible link instead of checking each framework in isolation
+- **Custom exclusions** *(new in 1.5)* — suppress noisy diagnostics by mod/source or by a literal word/phrase
 - **Failed-to-load tab** — ready-to-share list of incompatible mods
 - **Vortex support** — auto-detected, no extra configuration needed
 - **Bilingual UI** — Russian / English, switchable at runtime
@@ -109,6 +110,10 @@ Settings are auto-saved to `scanner_config.json` next to the `.exe`:
       {"name": "RED4ext", "min_version": "1.27.0"},
       {"name": "redscript", "min_version": "0.5.27"}
     ]
+  },
+  "exclusions": {
+    "sources": ["Faction Evolved"],
+    "phrases": ["optional vehicle record was not found"]
   }
 }
 ```
@@ -116,6 +121,13 @@ Settings are auto-saved to `scanner_config.json` next to the `.exe`:
 Edit `recommended` to pin versions for your game patch. A component entry in
 `framework_dependencies` replaces its built-in dependency list; rules support
 `min_version` and optional `max_version`.
+
+Use the **Exclusions…** button to edit `sources` and `phrases` without touching JSON.
+Rules are case-insensitive literal substrings, one per line; regular expressions are
+not supported. A source rule suppresses every diagnostic from that matching source,
+so prefer a stable phrase when only one harmless Faction Evolved vehicle message
+should be ignored. Exclusions affect diagnostics and counters only—embedded RAW LOGS
+remain unchanged for troubleshooting.
 
 ## Building from source
 
@@ -129,15 +141,19 @@ build_windows.bat
 ```
 
 Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
-Release ZIP: `dist\CP77CrashScanner_v1.4.0.zip`
+Binary ZIP: `dist\CP77CrashScanner_v1.5.0.zip`
+Corresponding source ZIP: `dist\CP77CrashScanner_v1.5.0_source.zip`
 
-**Note on antivirus detections:** Release builds use Nuitka standalone mode — no PyInstaller bootloader, UPX compression, obfuscation, or self-extracting installer. Full source code and SHA-256 checksums are included for review. An unsigned executable can still trigger reputation-based warnings; report any false positive to the relevant antivirus vendor.
+**Note on antivirus detections:** Release builds use Nuitka standalone mode — no PyInstaller bootloader, UPX compression, obfuscation, or self-extracting installer. The binary package includes SHA-256 checksums, and the release includes a separate corresponding-source ZIP for review. An unsigned executable can still trigger reputation-based warnings; report any false positive to the relevant antivirus vendor.
 
 For code signing: set `WINDOWS_CERT_PFX_BASE64` and `WINDOWS_CERT_PASSWORD` as GitHub Actions secrets. The workflow signs the EXE before generating checksums and the release ZIP.
 
 ## License
 
-MIT — free to use, modify, and redistribute.
+GNU General Public License v3.0 only (`GPL-3.0-only`). You may use, copy,
+modify, and redistribute the project under the GPL terms; distributed modified
+versions must remain under GPL v3 and provide corresponding source. See [LICENSE](LICENSE).
+The software is provided without warranty.
 
 ---
 
