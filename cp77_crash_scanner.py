@@ -36,6 +36,17 @@ SESSION_WINDOW_SECONDS = 2 * 3600
 CRASH_CORRELATION_SECONDS = 15 * 60
 TIMESTAMP_CONTEXT_LINES = 6
 
+
+def resource_path(name):
+    """Resolve a bundled asset in source, Nuitka, and PyInstaller builds."""
+    if hasattr(sys, "_MEIPASS"):
+        base = sys._MEIPASS
+    elif "__compiled__" in globals():
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, name)
+
 # --- классификация строк ------------------------------------------------------
 ERROR_RE = re.compile(
     r"\b(error|fatal|exception|panic|failed|failure|could ?not|cannot|unable|"
@@ -1463,6 +1474,10 @@ def run_gui():
 
     root = tk.Tk()
     root.title("CP77 Crash Scanner")
+    try:
+        root.iconbitmap(default=resource_path("app_icon.ico"))
+    except (OSError, tk.TclError):
+        pass
     root.geometry("1180x760")
     root.configure(bg=BG)
 

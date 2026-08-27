@@ -4,7 +4,7 @@ a = Analysis(
     ['cp77_crash_scanner.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('assets/app_icon.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -19,7 +19,7 @@ exe = EXE(
     pyz,
     a.scripts,
     [],
-    name='CP77CrashScanner',
+    name='CP77 Crash Scanner',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -33,6 +33,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version='file_version_info.txt',
+    icon='assets/app_icon.ico',
 )
 
 coll = COLLECT(

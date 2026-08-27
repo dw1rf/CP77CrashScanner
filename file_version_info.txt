@@ -23,7 +23,7 @@ VSVersionInfo(
         StringStruct(u'FileVersion', u'1.6.0.0'),
         StringStruct(u'InternalName', u'CP77CrashScanner'),
         StringStruct(u'LegalCopyright', u'Copyright (C) 2026 dw1rf'),
-        StringStruct(u'OriginalFilename', u'CP77CrashScanner.exe'),
+        StringStruct(u'OriginalFilename', u'CP77 Crash Scanner.exe'),
         StringStruct(u'ProductName', u'CP77 Crash Scanner'),
         StringStruct(u'ProductVersion', u'1.6.0.0')])
       ]),

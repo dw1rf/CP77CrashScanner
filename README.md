@@ -46,7 +46,7 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 
 ## Usage
 
-1. Download `CP77CrashScanner.exe` from [Releases](https://github.com/dw1rf/CP77CrashScanner/releases)
+1. Download `CP77 Crash Scanner.exe` from [Releases](https://github.com/dw1rf/CP77CrashScanner/releases)
 2. Run it — auto-scans if your MO2 instance path is already saved
 3. Set **MO2 instance** folder and/or **Game** folder
 4. Press **SCAN**
@@ -141,7 +141,7 @@ pip install -r requirements.txt
 build_windows.bat
 ```
 
-Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
+Output: `dist\CP77CrashScanner\CP77 Crash Scanner.exe` (onedir build)
 Binary ZIP: `dist\CP77CrashScanner_v1.6.0.zip`
 Corresponding source ZIP: `dist\CP77CrashScanner_v1.6.0_source.zip`
 

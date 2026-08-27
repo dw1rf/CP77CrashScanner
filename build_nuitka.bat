@@ -39,7 +39,9 @@ python -m nuitka ^
   --assume-yes-for-downloads ^
   --remove-output ^
   --output-dir=dist_nuitka ^
-  --output-filename=CP77CrashScanner.exe ^
+  --output-filename="CP77 Crash Scanner.exe" ^
+  --windows-icon-from-ico=assets\app_icon.ico ^
+  --include-data-file=assets\app_icon.ico=app_icon.ico ^
   --company-name=dw1rf ^
   --product-name="CP77 Crash Scanner" ^
   --file-version=%VERSION%.0 ^
@@ -56,7 +58,7 @@ echo.
 echo ============================================
 echo  Build complete
 echo  Folder: dist_nuitka\cp77_crash_scanner.dist\
-echo  EXE:    dist_nuitka\cp77_crash_scanner.dist\CP77CrashScanner.exe
+echo  EXE:    dist_nuitka\cp77_crash_scanner.dist\CP77 Crash Scanner.exe
 echo.
 echo  Distribute the WHOLE .dist folder (zip it),
 echo  not just the exe.

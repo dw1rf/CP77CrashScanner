@@ -44,7 +44,7 @@
 
 ## Использование
 
-1. Скачай `CP77CrashScanner.exe` из [Releases](https://github.com/dw1rf/CP77CrashScanner/releases)
+1. Скачай `CP77 Crash Scanner.exe` из [Releases](https://github.com/dw1rf/CP77CrashScanner/releases)
 2. Запусти — авто-сканирует, если путь к MO2-инстансу уже сохранён
 3. Укажи папку **MO2-инстанса** и/или папку **игры**
 4. Нажми **СКАНИРОВАТЬ**
@@ -137,7 +137,7 @@ pip install -r requirements.txt
 build_windows.bat
 ```
 
-Результат: `dist\CP77CrashScanner\CP77CrashScanner.exe`, бинарный архив
+Результат: `dist\CP77CrashScanner\CP77 Crash Scanner.exe`, бинарный архив
 `CP77CrashScanner_v1.6.0.zip` и архив соответствующих исходников
 `CP77CrashScanner_v1.6.0_source.zip`. Сборка использует Nuitka standalone без
 PyInstaller, UPX, обфускации и самораспаковывающегося установщика. В бинарный архив

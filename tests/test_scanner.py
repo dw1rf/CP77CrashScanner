@@ -351,10 +351,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)
         self.assertIn("Version 3, 29 June 2007", license_text)
 
+        icon = (root / "assets/app_icon.ico").read_bytes()
+        self.assertEqual(b"\x00\x00\x01\x00", icon[:4])
+        self.assertEqual(7, int.from_bytes(icon[4:6], "little"))
+        self.assertTrue((root / "assets/app_icon.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+
     def test_release_builds_include_license_and_source_archive(self):
         root = Path(__file__).resolve().parents[1]
         local_build = (root / "build_windows.bat").read_text(encoding="utf-8-sig")
+        nuitka_build = (root / "build_nuitka.bat").read_text(encoding="utf-8-sig")
         workflow = (root / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        spec = (root / "CP77CrashScanner.spec").read_text(encoding="utf-8")
 
         for content in (local_build, workflow):
             self.assertIn("LICENSE", content)
@@ -362,6 +369,10 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertIn("_source.zip", content)
         self.assertIn(r"tests\test_scanner.py", local_build)
         self.assertIn("tests/test_scanner.py", workflow)
+        for content in (local_build, nuitka_build, workflow):
+            self.assertIn("CP77 Crash Scanner.exe", content)
+        for content in (nuitka_build, workflow, spec):
+            self.assertIn("app_icon.ico", content)
 
 
 class FrameworkChainTests(unittest.TestCase):
