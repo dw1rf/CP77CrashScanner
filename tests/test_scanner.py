@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 dw1rf
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -226,6 +227,121 @@ this method replacement overwrites a previous annotation targeting the same meth
                 self.assertEqual(config, scanner.load_config())
 
 
+class SessionAndConfidenceTests(unittest.TestCase):
+    def scan_game(self, game_dir, recent_only=True):
+        with mock.patch.object(scanner, "detect_vortex_dir", return_value=None), \
+                mock.patch.object(scanner, "load_config", return_value={}):
+            return scanner.scan("", str(game_dir), recent_only=recent_only)
+
+    def test_latest_session_excludes_older_log_from_main_diagnosis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            logs = game_dir / "red4ext/logs"
+            logs.mkdir(parents=True)
+            old_log = logs / "old.log"
+            current_log = logs / "current.log"
+            old_log.write_text("[error] failed to initialize stale_plugin.dll\n", encoding="utf-8")
+            current_log.write_text("[warning] current session warning\n", encoding="utf-8")
+            old_time = 1_700_000_000
+            os.utime(old_log, (old_time, old_time))
+            os.utime(current_log, (old_time + scanner.SESSION_WINDOW_SECONDS + 60,) * 2)
+
+            result = self.scan_game(game_dir)
+
+        self.assertEqual([str(old_log)], [path for path, _ in result.older_log_files])
+        self.assertFalse(any("stale_plugin" in finding.text for finding in result.findings))
+        self.assertTrue(any("current session" in finding.text for finding in result.findings))
+
+    def test_old_timestamped_block_is_excluded_from_current_append_only_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            log_path = game_dir / "red4ext/logs/plugin.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text(
+                "[2026-01-01 10:00:00] [error] failed to initialize stale.dll\n"
+                "[2026-08-27 10:00:00] [info] current launch started\n",
+                encoding="utf-8",
+            )
+            current_time = scanner.dt.datetime(2026, 8, 27, 10, 5, 0).timestamp()
+            os.utime(log_path, (current_time, current_time))
+
+            result = self.scan_game(game_dir)
+
+        self.assertEqual([], result.findings)
+
+    def test_plain_error_is_not_automatically_a_crash_cause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            log_path = game_dir / "red4ext/logs/plugin.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text("[error] optional runtime record unavailable\n", encoding="utf-8")
+
+            result = self.scan_game(game_dir)
+
+        self.assertEqual("none", result.findings[0].confidence)
+        self.assertEqual("unclassified", result.findings[0].relevance)
+        self.assertEqual("unclassified", result.diagnosis_state)
+
+    def test_nca_without_temporal_crash_correlation_is_low_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            log_path = game_dir / "red4ext/logs/nca.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text("[NCA] error: unexpected spawn state\n", encoding="utf-8")
+
+            result = self.scan_game(game_dir)
+
+        diagnosis = result.problems[0]
+        self.assertEqual(("low", "context", False),
+                         (diagnosis.confidence, diagnosis.relevance, diagnosis.correlated))
+        self.assertEqual("unclassified", result.diagnosis_state)
+
+    def test_nca_near_current_dump_is_medium_possible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            logs = game_dir / "red4ext/logs"
+            logs.mkdir(parents=True)
+            log_path = logs / "nca.log"
+            dump_path = logs / "Cyberpunk2077.dmp"
+            log_path.write_text("[NCA] error: unexpected spawn state\n", encoding="utf-8")
+            dump_path.write_bytes(b"dump")
+            event_time = 1_800_000_000
+            os.utime(log_path, (event_time, event_time))
+            os.utime(dump_path, (event_time + 30, event_time + 30))
+
+            result = self.scan_game(game_dir)
+
+        diagnosis = result.problems[0]
+        self.assertEqual(("medium", "possible", True),
+                         (diagnosis.confidence, diagnosis.relevance, diagnosis.correlated))
+        self.assertEqual("classified", result.diagnosis_state)
+
+    def test_fresh_dump_without_known_signature_is_unclassified_and_report_is_sendable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game_dir = Path(tmp)
+            logs = game_dir / "red4ext/logs"
+            logs.mkdir(parents=True)
+            log_path = logs / "plugin.log"
+            dump_path = logs / "Cyberpunk2077.dmp"
+            log_path.write_text("[error] unexpected engine shutdown\n", encoding="utf-8")
+            dump_path.write_bytes(b"dump")
+
+            result = self.scan_game(game_dir)
+            report = scanner.build_report(result, "", str(game_dir), include_raw=True)
+
+        self.assertEqual("unclassified_crash", result.diagnosis_state)
+        self.assertIn("ONE-FILE SUPPORT REPORT", report)
+        self.assertIn("[UNCLASSIFIED CTD]", report)
+        self.assertIn("unexpected engine shutdown", report)
+        self.assertIn("RAW LOGS FROM ACTIVE SESSION", report)
+
+    def test_non_russian_system_gets_english_fallback(self):
+        with mock.patch.object(scanner.locale, "getlocale", return_value=("de_DE", "UTF-8")):
+            self.assertEqual("en", scanner.detect_default_language())
+        with mock.patch.object(scanner.locale, "getlocale", return_value=("ru_RU", "UTF-8")):
+            self.assertEqual("ru", scanner.detect_default_language())
+
+
 class ReleaseMetadataTests(unittest.TestCase):
     def test_version_metadata_and_license_are_present(self):
         root = Path(__file__).resolve().parents[1]
@@ -242,6 +358,7 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         for content in (local_build, workflow):
             self.assertIn("LICENSE", content)
+            self.assertIn("CHANGELOG.md", content)
             self.assertIn("_source.zip", content)
         self.assertIn(r"tests\test_scanner.py", local_build)
         self.assertIn("tests/test_scanner.py", workflow)

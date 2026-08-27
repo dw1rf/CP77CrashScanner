@@ -31,27 +31,33 @@ if errorlevel 1 (
 )
 copy /y README.md dist\CP77CrashScanner\ > nul
 copy /y README_RU.md dist\CP77CrashScanner\ > nul
+copy /y CHANGELOG.md dist\CP77CrashScanner\ > nul
 copy /y LICENSE dist\CP77CrashScanner\ > nul
 
 powershell -NoProfile -Command ^
   "$package = (Resolve-Path 'dist\CP77CrashScanner').Path;" ^
-  "Get-ChildItem -Recurse -File $package | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object FullName | ForEach-Object {" ^
-  "  $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash;" ^
+  "$sha256 = [Security.Cryptography.SHA256]::Create();" ^
+  "try { Get-ChildItem -Recurse -File $package | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object FullName | ForEach-Object {" ^
+  "  $stream = [IO.File]::OpenRead($_.FullName);" ^
+  "  try { $hash = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '') } finally { $stream.Dispose() };" ^
   "  $relative = $_.FullName.Substring($package.Length + 1);" ^
   "  Write-Output ($hash + '  ' + $relative)" ^
-  "} | Set-Content -Encoding utf8 (Join-Path $package 'SHA256SUMS.txt')"
+  "} | Set-Content -Encoding utf8 (Join-Path $package 'SHA256SUMS.txt') } finally { $sha256.Dispose() }"
 if errorlevel 1 exit /b 1
 
 echo [4/5] Verifying checksums and creating binary ZIP...
 if exist dist\CP77CrashScanner_v%VERSION%.zip del /q dist\CP77CrashScanner_v%VERSION%.zip
 powershell -NoProfile -Command ^
   "$package = (Resolve-Path 'dist\CP77CrashScanner').Path;" ^
-  "foreach ($line in Get-Content (Join-Path $package 'SHA256SUMS.txt')) {" ^
+  "$sha256 = [Security.Cryptography.SHA256]::Create();" ^
+  "try { foreach ($line in Get-Content (Join-Path $package 'SHA256SUMS.txt')) {" ^
   "  if ($line -notmatch '^([0-9A-F]{64})  (.+)$') { throw ('Malformed checksum: ' + $line) };" ^
   "  $path = Join-Path $package $Matches[2];" ^
   "  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw ('Missing checksum path: ' + $Matches[2]) };" ^
-  "  if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $Matches[1]) { throw ('Checksum mismatch: ' + $Matches[2]) }" ^
-  "};" ^
+  "  $expected = $Matches[1]; $stream = [IO.File]::OpenRead($path);" ^
+  "  try { $actual = ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '') } finally { $stream.Dispose() };" ^
+  "  if ($actual -ne $expected) { throw ('Checksum mismatch: ' + $Matches[2]) }" ^
+  "} } finally { $sha256.Dispose() };" ^
   "Compress-Archive -Force -Path 'dist\CP77CrashScanner' -DestinationPath 'dist\CP77CrashScanner_v%VERSION%.zip'"
 if errorlevel 1 exit /b 1
 
@@ -61,7 +67,7 @@ powershell -NoProfile -Command ^
   "$sourceItems = @(" ^
   "  'cp77_crash_scanner.py', 'tests\test_scanner.py', 'requirements.txt', 'version.txt'," ^
   "  'file_version_info.txt', 'CP77CrashScanner.spec', 'build_windows.bat'," ^
-  "  'build_nuitka.bat', 'README.md', 'README_RU.md', 'LICENSE'," ^
+  "  'build_nuitka.bat', 'README.md', 'README_RU.md', 'CHANGELOG.md', 'LICENSE'," ^
   "  '.github\workflows\build.yml'" ^
   ");" ^
   "Compress-Archive -Force -Path $sourceItems -DestinationPath 'dist\CP77CrashScanner_v%VERSION%_source.zip'"

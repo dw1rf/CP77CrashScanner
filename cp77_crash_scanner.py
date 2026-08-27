@@ -11,12 +11,13 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 import os
 import re
 import sys
 import json
+import locale
 import threading
 import datetime as dt
 
@@ -31,6 +32,9 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scanner_
 MAX_READ_BYTES = 4 * 1024 * 1024
 REPORT_PER_LOG_CAP = 400 * 1024
 VORTEX_APPDATA = os.path.join(os.environ.get("APPDATA", ""), "Vortex")
+SESSION_WINDOW_SECONDS = 2 * 3600
+CRASH_CORRELATION_SECONDS = 15 * 60
+TIMESTAMP_CONTEXT_LINES = 6
 
 # --- классификация строк ------------------------------------------------------
 ERROR_RE = re.compile(
@@ -130,6 +134,20 @@ HEURISTICS = [
     (re.compile(r"\[NCA\].*?(error|unexpected spawn state|effect not found)", re.I), "prob_nca_spawn"),
 ]
 
+HEURISTIC_CONFIDENCE = {
+    "prob_redscript": ("medium", "possible"),
+    "prob_plugin": ("medium", "possible"),
+    "prob_version": ("medium", "possible"),
+    "prob_missing_class": ("low", "context"),
+    "prob_av": ("medium", "possible"),
+    "prob_archive": ("medium", "possible"),
+    # This runtime error is not sufficient CTD evidence by itself.
+    "prob_nca_spawn": ("low", "context"),
+}
+CRASH_SIGNAL_RE = re.compile(
+    r"\b(?:crash(?:ed)?|access violation|stack overflow|null pointer|0xC0000005|fatal error)\b",
+    re.IGNORECASE)
+
 # Files that are documentation/licenses, not log files — skip scanning them for errors
 SKIP_STEMS = frozenset({
     "thirdpartynotices", "license", "licence", "changelog", "readme",
@@ -137,12 +155,12 @@ SKIP_STEMS = frozenset({
 })
 
 # --- i18n ---------------------------------------------------------------------
-CURRENT_LANG = "ru"
+CURRENT_LANG = "en"
 TR = {
     "instance": {"ru": "MO2 инстанс (необяз. для Vortex):", "en": "MO2 instance (optional for Vortex):"},
     "game": {"ru": "Игра:", "en": "Game:"},
     "language": {"ru": "Язык:", "en": "Language:"},
-    "only_recent": {"ru": "Только последняя сессия (±2ч)", "en": "Only last session (±2h)"},
+    "only_recent": {"ru": "Последняя сессия (рекомендуется)", "en": "Latest session only (recommended)"},
     "hide_cos": {"ru": "Скрывать косметику", "en": "Hide cosmetic"},
     "embed_raw": {"ru": "Вкладывать сырые логи в отчёт", "en": "Embed raw logs in report"},
     "exclusions": {"ru": "Исключения…", "en": "Exclusions…"},
@@ -164,7 +182,7 @@ TR = {
     "excl_saved": {"ru": "Исключения сохранены: {} правил.",
                    "en": "Exclusions saved: {} rules."},
     "scan": {"ru": "🔍  СКАНИРОВАТЬ", "en": "🔍  SCAN"},
-    "export": {"ru": "📄  ОТЧЁТ В 1 ФАЙЛ", "en": "📄  REPORT TO 1 FILE"},
+    "export": {"ru": "📄  SUPPORT REPORT (1 ФАЙЛ)", "en": "📄  SUPPORT REPORT (1 FILE)"},
     "purge": {"ru": "🗑  Очистить логи", "en": "🗑  Purge logs"},
     "purge_t": {"ru": "Очистка логов", "en": "Purge logs"},
     "purge_none": {"ru": "Лог-файлы не найдены — очищать нечего.",
@@ -206,6 +224,7 @@ TR = {
     "col_errors": {"ru": "Ошибки (×повторы)", "en": "Errors (×repeats)"},
     "col_warn": {"ru": "Предупр.", "en": "Warnings"},
     "col_type": {"ru": "Тип", "en": "Type"},
+    "col_relevance": {"ru": "Связь с CTD", "en": "CTD relevance"},
     "col_n": {"ru": "×N", "en": "×N"},
     "col_msg": {"ru": "Сообщение", "en": "Message"},
     "col_name": {"ru": "Имя", "en": "Name"},
@@ -221,18 +240,19 @@ TR = {
     "scan_err": {"ru": "Ошибка: {}", "en": "Error: {}"},
     "scan_err_t": {"ru": "Ошибка сканирования", "en": "Scan error"},
     "exp_need_scan": {"ru": "Сначала нажми «Сканировать».", "en": "Press “Scan” first."},
-    "exp_title": {"ru": "Сохранить отчёт одним файлом", "en": "Save report to one file"},
+    "exp_title": {"ru": "Сохранить Support Report одним файлом", "en": "Save one-file Support Report"},
     "exp_making": {"ru": "Формирую отчёт…", "en": "Generating report…"},
     "exp_saved_status": {"ru": "Отчёт сохранён: {} ({})", "en": "Report saved: {} ({})"},
     "exp_done_t": {"ru": "Готово", "en": "Done"},
-    "exp_done_msg": {"ru": "Отчёт сохранён ({}):\n{}\n\nОткрыть папку с файлом?",
-                     "en": "Report saved ({}):\n{}\n\nOpen containing folder?"},
+    "exp_done_msg": {"ru": "Support Report сохранён ({}):\n{}\n\nОтправь этот один файл автору мода. Открыть папку?",
+                      "en": "Support Report saved ({}):\n{}\n\nSend this single file to the mod author. Open its folder?"},
     "exp_err": {"ru": "Ошибка экспорта: {}", "en": "Export error: {}"},
     "exp_err_t": {"ru": "Ошибка экспорта", "en": "Export error"},
     "export_t": {"ru": "Экспорт", "en": "Export"},
     "sum_h": {"ru": "СВОДКА", "en": "SUMMARY"},
     "sum_logs": {"ru": "Просканировано логов: {}", "en": "Logs scanned: {}"},
-    "sum_err": {"ru": "Значимых ошибок: ", "en": "Significant errors: "},
+    "sum_err": {"ru": "Ошибок в логах (не обязательно причина CTD): ",
+                "en": "Log errors (not automatically a CTD cause): "},
     "sum_types_total": {"ru": "{} видов / {} всего\n", "en": "{} types / {} total\n"},
     "sum_warn": {"ru": "Предупреждений: ", "en": "Warnings: "},
     "sum_cos": {"ru": "Косметика (декали/материалы): {} видов / {} всего {}\n",
@@ -241,11 +261,25 @@ TR = {
                        "en": "Custom exclusions: {} rules / {} suppressed\n"},
     "hidden": {"ru": "[скрыта]", "en": "[hidden]"},
     "sum_lf": {"ru": "Не загрузилось/не скомпилировалось: ", "en": "Failed to load/compile: "},
-    "sum_dmp": {"ru": "Крэш-дампов: {}\n", "en": "Crash dumps: {}\n"},
+    "sum_dmp": {"ru": "Крэш-дампов в сессии: {}\n", "en": "Crash dumps in session: {}\n"},
+    "sum_session": {"ru": "Активная сессия: {}\n", "en": "Active session: {}\n"},
+    "sum_old_logs": {"ru": "Старых логов вне диагноза: {}\n", "en": "Older logs excluded from diagnosis: {}\n"},
     "sum_top": {"ru": "ТОП модов по ошибкам", "en": "TOP mods by errors"},
     "sum_no_err": {"ru": "  ✓ значимых ошибок нет", "en": "  ✓ no significant errors"},
-    "sum_causes": {"ru": "ВОЗМОЖНЫЕ ПРИЧИНЫ ВЫЛЕТОВ", "en": "POSSIBLE CRASH CAUSES"},
-    "sum_no_causes": {"ru": "  ✓ типовых причин не найдено.\n", "en": "  ✓ no typical causes found.\n"},
+    "sum_causes": {"ru": "ДИАГНОЗ ВЫЛЕТА", "en": "CRASH DIAGNOSIS"},
+    "diag_unclassified_crash": {
+        "ru": "  ? UNCLASSIFIED: в последней сессии есть свежий CTD/дамп, но известная причина не определена.\n",
+        "en": "  ? UNCLASSIFIED: the latest session has a fresh CTD/dump, but no known cause was identified.\n"},
+    "diag_unclassified": {
+        "ru": "  ? Причина не классифицирована. Ошибки ниже могут быть нефатальными.\n",
+        "en": "  ? Cause unclassified. Errors below may be non-fatal.\n"},
+    "confidence_high": {"ru": "высокая", "en": "high"},
+    "confidence_medium": {"ru": "средняя", "en": "medium"},
+    "confidence_low": {"ru": "низкая", "en": "low"},
+    "relevance_likely": {"ru": "вероятная причина", "en": "likely cause"},
+    "relevance_possible": {"ru": "возможная причина", "en": "possible cause"},
+    "relevance_context": {"ru": "контекст / может быть нефатально", "en": "context / may be non-fatal"},
+    "relevance_unclassified": {"ru": "не классифицировано", "en": "unclassified"},
     "lf_none": {"ru": "✓ Ничего не упало при загрузке — несовместимых модов не найдено.",
                 "en": "✓ Nothing failed at load — no incompatible mods found."},
     "cosmetic_w": {"ru": "косметика", "en": "cosmetic"},
@@ -286,11 +320,11 @@ TR = {
     "prob_archive": {"ru": "Не найден .archive — неполная установка или отсутствует зависимость.",
                      "en": "Missing .archive — incomplete install or a missing dependency."},
     "prob_nca_spawn": {"ru": "NCA (Night City Allies): сбой стейт-машины компаньонов. "
-                             "Вызывает вылеты в конкретных локациях (Lizzie's, El Coyote и т.п.). "
-                             "Переустанови NCA свежей версией.",
-                       "en": "NCA (Night City Allies): companion spawn state machine error. "
-                             "Causes location-specific crashes (Lizzie's, El Coyote, etc.). "
-                             "Reinstall NCA with the latest version."},
+                             "Без близкого по времени дампа это может быть нефатальная ошибка; "
+                             "при корреляции проверь свежую версию NCA.",
+                       "en": "NCA (Night City Allies): companion spawn state-machine error. "
+                             "Without a nearby dump this may be non-fatal; when correlated, "
+                             "check for an updated NCA release."},
     "prob_redscript_lbl":     {"ru": "ошибка компиляции redscript",        "en": "redscript compile error"},
     "prob_plugin_lbl":        {"ru": "плагин RED4ext не загрузился",        "en": "RED4ext plugin failed to load"},
     "prob_version_lbl":       {"ru": "несовместимая версия (не тот патч)",  "en": "version mismatch (wrong patch)"},
@@ -306,15 +340,28 @@ TR = {
 
 def T(key, *args):
     d = TR.get(key)
-    s = (d.get(CURRENT_LANG) or d.get("ru")) if d else key
+    s = (d.get(CURRENT_LANG) or d.get("en")) if d else key
     return s.format(*args) if args else s
+
+
+def detect_default_language():
+    """Use Russian on Russian systems and English everywhere else."""
+    try:
+        language = (locale.getlocale()[0] or "").lower()
+    except Exception:
+        language = ""
+    if not language:
+        language = (os.environ.get("LANG") or "").lower()
+    return "ru" if language.startswith(("ru", "russian")) else "en"
 
 
 # --- модель -------------------------------------------------------------------
 class Finding:
-    __slots__ = ("source", "severity", "text", "count", "cosmetic", "is_load_fail", "path", "line_no")
+    __slots__ = ("source", "severity", "text", "count", "cosmetic", "is_load_fail", "path", "line_no",
+                 "timestamp", "confidence", "relevance")
 
-    def __init__(self, source, severity, text, cosmetic, is_load_fail, path, line_no):
+    def __init__(self, source, severity, text, cosmetic, is_load_fail, path, line_no,
+                 timestamp=None, confidence="none", relevance="unclassified"):
         self.source = source
         self.severity = severity
         self.text = text.rstrip()
@@ -323,6 +370,26 @@ class Finding:
         self.is_load_fail = is_load_fail
         self.path = path
         self.line_no = line_no
+        self.timestamp = timestamp
+        self.confidence = confidence
+        self.relevance = relevance
+
+
+class Diagnosis:
+    __slots__ = ("source", "key", "confidence", "relevance", "evidence", "path",
+                 "line_no", "timestamp", "correlated")
+
+    def __init__(self, source, key, confidence, relevance, evidence, path, line_no,
+                 timestamp=None, correlated=False):
+        self.source = source
+        self.key = key
+        self.confidence = confidence
+        self.relevance = relevance
+        self.evidence = evidence.rstrip()
+        self.path = path
+        self.line_no = line_no
+        self.timestamp = timestamp
+        self.correlated = correlated
 
 
 class Conflict:
@@ -381,11 +448,19 @@ class ScanResult:
         self.versions = {}
         self.recommended = {}
         self.problems = []
+        self.diagnosis_state = "unclassified"
+        self.crash_signals = []
         self.conflicts = []
         self.framework_states = {}
         self.chain_diagnostics = []
         self.scanned_files = 0
         self.log_files = []
+        self.older_log_files = []
+        self.all_log_files = []
+        self.session_dumps = []
+        self.session_start = None
+        self.session_end = None
+        self.session_mode = "latest"
         self.roots = []
         self.err_unique = self.err_occ = 0
         self.warn_unique = self.warn_occ = 0
@@ -590,6 +665,78 @@ def read_capped(path, cap):
             return f.read().decode("utf-8", errors="replace"), truncated, size
     except Exception as e:
         return f"<read error: {e}>", False, 0
+
+
+ISO_TIMESTAMP_RE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?!\d)")
+TEXT_TIMESTAMP_RE = re.compile(
+    r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+\d{1,2}\s+"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s+"
+    r"\d{2}:\d{2}:\d{2}(?:\s+[+-]\d{4})?",
+    re.IGNORECASE)
+
+
+def parse_log_timestamp(line):
+    """Best-effort local epoch timestamp for common RED4ext/CET/redscript lines."""
+    match = ISO_TIMESTAMP_RE.search(line)
+    if match:
+        try:
+            return dt.datetime.strptime(" ".join(match.groups()), "%Y-%m-%d %H:%M:%S").timestamp()
+        except (ValueError, OSError):
+            pass
+    match = TEXT_TIMESTAMP_RE.search(line)
+    if match:
+        value = match.group(0)
+        for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S"):
+            try:
+                return dt.datetime.strptime(value, fmt).timestamp()
+            except (ValueError, OSError):
+                continue
+    return None
+
+
+def content_for_session(content, cutoff):
+    """Drop timestamped blocks older than the selected session, preserving untimed logs."""
+    if cutoff is None:
+        return content
+    kept = []
+    block_timestamp = None
+    context_lines = 0
+    for line in content.splitlines(keepends=True):
+        line_timestamp = parse_log_timestamp(line)
+        if line_timestamp is not None:
+            block_timestamp = line_timestamp
+            context_lines = TIMESTAMP_CONTEXT_LINES
+        elif context_lines > 0:
+            context_lines -= 1
+        else:
+            block_timestamp = None
+        if block_timestamp is None or block_timestamp >= cutoff:
+            kept.append(line)
+    return "".join(kept)
+
+
+def format_session_range(res):
+    if res.session_end is None:
+        return "unknown"
+    start = dt.datetime.fromtimestamp(res.session_start).strftime("%Y-%m-%d %H:%M:%S")
+    end = dt.datetime.fromtimestamp(res.session_end).strftime("%Y-%m-%d %H:%M:%S")
+    return f"{start} .. {end}"
+
+
+def _is_correlated_with_dump(timestamp, dumps):
+    return bool(timestamp is not None and any(
+        abs(timestamp - dump_mtime) <= CRASH_CORRELATION_SECONDS
+        for _, dump_mtime, _ in dumps
+    ))
+
+
+def diagnosis_confidence(key, correlated=False, line=""):
+    confidence, relevance = HEURISTIC_CONFIDENCE.get(key, ("low", "context"))
+    if key == "prob_nca_spawn" and correlated:
+        return "medium", "possible"
+    if key == "prob_av" and (correlated or CRASH_SIGNAL_RE.search(line)):
+        return "high", "likely"
+    return confidence, relevance
 
 
 DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}.*$")
@@ -934,32 +1081,48 @@ def scan(instance_dir, game_dir, recent_only=False):
                         mt = 0
                     log_paths.append((full, mt))
 
-    if recent_only and log_paths:
-        newest = max(mt for _, mt in log_paths)
-        cutoff = newest - 2 * 3600
-        log_paths = [(p, mt) for p, mt in log_paths if mt >= cutoff]
-
     log_paths.sort(key=lambda x: x[1], reverse=True)
+    res.dumps.sort(key=lambda x: x[1], reverse=True)
+    res.all_log_files = list(log_paths)
+    artifact_times = [mt for _, mt in log_paths if mt] + [mt for _, mt, _ in res.dumps if mt]
+    session_cutoff = None
+    if artifact_times:
+        res.session_end = max(artifact_times)
+        session_cutoff = res.session_end - SESSION_WINDOW_SECONDS
+        res.session_start = session_cutoff
+    latest_logs = [(p, mt) for p, mt in log_paths if session_cutoff is None or mt >= session_cutoff]
+    latest_dumps = [(p, mt, size) for p, mt, size in res.dumps
+                    if session_cutoff is None or mt >= session_cutoff]
+    if recent_only:
+        res.session_mode = "latest"
+        res.older_log_files = [(p, mt) for p, mt in log_paths if session_cutoff is not None and mt < session_cutoff]
+        log_paths = latest_logs
+        res.session_dumps = latest_dumps
+    else:
+        res.session_mode = "all"
+        res.session_start = min(artifact_times) if artifact_times else None
+        res.session_dumps = list(res.dumps)
     res.log_files = log_paths
 
     raw = {}
-    seen: set = set()
+    problem_map = {}
     conflict_seen: set = set()
     loaded_frameworks: set = set()
     for path, mt in log_paths:
         res.scanned_files += 1
         content = read_tail(path)
+        diagnostic_content = content_for_session(content, session_cutoff if recent_only else None)
         low_path = path.replace("\\", "/").lower()
         is_redscript_log = "redscript" in os.path.basename(path).lower() or "/r6/logs/" in low_path
         for name, pat in FRAMEWORK_LOAD_PATTERNS.items():
-            if pat.search(content):
+            if pat.search(diagnostic_content):
                 loaded_frameworks.add(name)
         for name, pat in VERSION_PATTERNS:
             if name not in res.versions:
-                m = pat.search(content)
+                m = pat.search(diagnostic_content)
                 if m:
                     res.versions[name] = m.group(1)
-        for c in extract_conflicts(path, content):
+        for c in extract_conflicts(path, diagnostic_content):
             if _conflict_is_excluded(res.exclusions, c):
                 res.excluded_count += 1
                 continue
@@ -967,9 +1130,20 @@ def scan(instance_dir, game_dir, recent_only=False):
             if ckey not in conflict_seen:
                 conflict_seen.add(ckey)
                 res.conflicts.append(c)
-        for i, line in enumerate(content.splitlines(), 1):
+        block_timestamp = None
+        timestamp_context = 0
+        for i, line in enumerate(diagnostic_content.splitlines(), 1):
             if not line.strip():
                 continue
+            line_timestamp = parse_log_timestamp(line)
+            if line_timestamp is not None:
+                block_timestamp = line_timestamp
+                timestamp_context = TIMESTAMP_CONTEXT_LINES
+            elif timestamp_context > 0:
+                timestamp_context -= 1
+            else:
+                block_timestamp = None
+            event_timestamp = block_timestamp if block_timestamp is not None else mt
             if is_redscript_log and REDSCRIPT_LOCATION_HEADER_RE.search(line):
                 continue
             if is_redscript_log and REDSCRIPT_INVENTORY_RE.fullmatch(line):
@@ -1000,15 +1174,26 @@ def scan(instance_dir, game_dir, recent_only=False):
             f = raw.get(key)
             if f:
                 f.count += 1
-                continue
-            is_lf = (sev == "ERROR" and not cosmetic and bool(LOAD_FAIL_RE.search(line)))
-            raw[key] = Finding(src, sev, line, cosmetic, is_lf, path, i)
+            else:
+                is_lf = (sev == "ERROR" and not cosmetic and bool(LOAD_FAIL_RE.search(line)))
+                f = Finding(src, sev, line, cosmetic, is_lf, path, i, timestamp=event_timestamp)
+                raw[key] = f
+            if sev == "ERROR" and CRASH_SIGNAL_RE.search(line):
+                res.crash_signals.append((src, line.rstrip(), event_timestamp))
             for hpat, pkey in HEURISTICS:
                 if not cosmetic and hpat.search(line):
-                    pair = (src, pkey)
-                    if pair not in seen:
-                        seen.add(pair)
-                        res.problems.append(pair)
+                    correlated = _is_correlated_with_dump(event_timestamp, res.session_dumps)
+                    confidence, relevance = diagnosis_confidence(pkey, correlated, line)
+                    rank = {"none": 0, "low": 1, "medium": 2, "high": 3}
+                    if rank[confidence] > rank.get(f.confidence, 0):
+                        f.confidence = confidence
+                        f.relevance = relevance
+                    diag = Diagnosis(src, pkey, confidence, relevance, line, path, i,
+                                     event_timestamp, correlated)
+                    diag_key = (src, pkey)
+                    previous = problem_map.get(diag_key)
+                    if previous is None or rank[confidence] > rank[previous.confidence]:
+                        problem_map[diag_key] = diag
 
     if "redscript" not in res.versions and game_dir:
         for rspath in [
@@ -1024,6 +1209,16 @@ def scan(instance_dir, game_dir, recent_only=False):
     findings = list(raw.values())
     findings.sort(key=lambda f: (not f.is_load_fail, f.severity != "ERROR", -f.count))
     res.findings = findings
+    confidence_rank = {"high": 0, "medium": 1, "low": 2}
+    res.problems = sorted(problem_map.values(),
+                          key=lambda d: (confidence_rank.get(d.confidence, 3), d.source, d.key))
+    actionable = any(d.relevance in ("likely", "possible") for d in res.problems)
+    if actionable:
+        res.diagnosis_state = "classified"
+    elif res.session_dumps or res.crash_signals:
+        res.diagnosis_state = "unclassified_crash"
+    else:
+        res.diagnosis_state = "unclassified"
     res.load_fails = [f for f in findings if f.is_load_fail]
     chain_result = evaluate_framework_chains(
         res.versions, findings, dependency_rules, loaded_frameworks, res.recommended)
@@ -1077,7 +1272,6 @@ def scan(instance_dir, game_dir, recent_only=False):
         if len(agg["samples"]) < 40:
             agg["samples"].append(f)
 
-    res.dumps.sort(key=lambda x: x[1], reverse=True)
     return res
 
 
@@ -1085,16 +1279,37 @@ def scan(instance_dir, game_dir, recent_only=False):
 def build_report(res, instance, game, include_raw=True):
     L = []
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    L += ["=" * 72, "CP77 CRASH SCANNER — REPORT", f"Date: {now}",
+    L += ["=" * 72, "CP77 CRASH SCANNER — ONE-FILE SUPPORT REPORT",
+          f"Scanner version: {__version__}", f"Generated: {now}",
           f"MO2 instance: {instance}", f"Game: {game}",
           f"Game version: {res.versions.get('Game', '-')}", "=" * 72, "",
+          "Send this single file when asking for support; the relevant raw logs are embedded below.", "",
+          "--- SESSION SELECTION ---",
+          f"Mode: {'latest session only' if res.session_mode == 'latest' else 'all discovered logs'}",
+          f"Active range: {format_session_range(res)}",
           f"Logs scanned: {res.scanned_files}",
-          f"Significant errors: {res.err_unique} types / {res.err_occ} total",
+          f"Older logs excluded from the main diagnosis: {len(res.older_log_files)}",
+          f"Log errors (not automatically CTD causes): {res.err_unique} types / {res.err_occ} total",
           f"Cosmetic: {res.cosmetic_unique} types / {res.cosmetic_occ} total",
           f"Active custom exclusion rules: {res.active_exclusion_rules}",
           f"Excluded by custom rules: {res.excluded_count}",
           f"Failed to load/compile: {len(res.load_fails)}",
-          f"Crash dumps: {len(res.dumps)}", ""]
+          f"Crash dumps in active session: {len(res.session_dumps)}", ""]
+
+    L += ["--- CRASH DIAGNOSIS ---",
+          "Confidence describes CTD relevance; ERROR is only the source log level."]
+    if res.problems:
+        for diag in res.problems:
+            label = TR[diag.key]["en"]
+            correlation = " + temporally correlated dump" if diag.correlated else ""
+            L.append(f"  [{diag.confidence.upper()} | {diag.relevance.upper()}] "
+                     f"[{diag.source}] {label}{correlation}")
+            L.append(f"    evidence: {diag.evidence[:500]}")
+    if res.diagnosis_state == "unclassified_crash":
+        L.append("  [UNCLASSIFIED CTD] A current crash signal/dump exists, but no likely or possible known cause was identified.")
+    elif res.diagnosis_state == "unclassified":
+        L.append("  [UNCLASSIFIED] No crash cause was identified; listed log errors may be non-fatal.")
+    L.append("")
 
     L.append("--- FRAMEWORK VERSIONS ---")
     for name in CORE_FRAMEWORKS:
@@ -1117,12 +1332,6 @@ def build_report(res, instance, game, include_raw=True):
             if diag.evidence:
                 L.append("    evidence: " + diag.evidence.strip()[:500])
     L.append("")
-
-    if res.problems:
-        L.append("--- POSSIBLE CRASH CAUSES ---")
-        for src, pkey in res.problems:
-            L.append(f"  * [{src}] {TR[pkey]['en']}")
-        L.append("")
 
     L.append(f"--- FAILED TO LOAD / COMPILE ({len(res.load_fails)}) ---")
     if not res.load_fails:
@@ -1149,18 +1358,34 @@ def build_report(res, instance, game, include_raw=True):
     L.append("--- ALL SIGNIFICANT ERRORS (deduped, no cosmetic) ---")
     for f in res.findings:
         if not f.cosmetic:
-            L.append(f"  [{f.severity}] x{f.count} [{f.source}] {f.text.strip()}")
+            relevance = f"{f.confidence.upper()}/{f.relevance.upper()}" if f.confidence != "none" else "UNCLASSIFIED"
+            L.append(f"  [{f.severity} | {relevance}] x{f.count} [{f.source}] {f.text.strip()}")
     L.append("")
 
-    if res.dumps:
-        L.append("--- CRASH DUMPS ---")
-        for p, mt, size in res.dumps:
+    if res.session_dumps:
+        L.append("--- CRASH DUMPS IN ACTIVE SESSION ---")
+        for p, mt, size in res.session_dumps:
             when = dt.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S")
             L.append(f"  {when}  {os.path.basename(p)}  ({size} bytes)  {p}")
         L.append("")
 
+    older_dumps = [item for item in res.dumps if item not in res.session_dumps]
+    if older_dumps:
+        L.append("--- OLDER CRASH DUMPS (NOT USED FOR MAIN DIAGNOSIS) ---")
+        for p, mt, size in older_dumps:
+            when = dt.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S")
+            L.append(f"  {when}  {os.path.basename(p)}  ({size} bytes)  {p}")
+        L.append("")
+
+    if res.older_log_files:
+        L.append("--- OLDER LOGS (NOT USED FOR MAIN DIAGNOSIS) ---")
+        for p, mt in res.older_log_files:
+            when = dt.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S") if mt else "?"
+            L.append(f"  {when}  {p}")
+        L.append("")
+
     if include_raw:
-        L += ["", "=" * 72, "RAW LOGS", "=" * 72]
+        L += ["", "=" * 72, "RAW LOGS FROM ACTIVE SESSION", "=" * 72]
         for p, mt in res.log_files:
             data, trunc, size = read_capped(p, REPORT_PER_LOG_CAP)
             when = dt.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S") if mt else "?"
@@ -1184,8 +1409,9 @@ def run_cli():
     inst = cfg.get("instance", DEFAULT_INSTANCE)
     game = cfg.get("game") or parse_game_path(inst)
     print(f"Instance: {inst}\nGame: {game}")
-    res = scan(inst, game)
-    print(f"\nLogs: {res.scanned_files} | dumps: {len(res.dumps)}")
+    res = scan(inst, game, recent_only=True)
+    print(f"\nSession: {format_session_range(res)}")
+    print(f"Logs: {res.scanned_files} | session dumps: {len(res.session_dumps)} | older logs excluded: {len(res.older_log_files)}")
     print(f"Significant errors: {res.err_unique} types / {res.err_occ} total")
     print(f"Cosmetic (hidden): {res.cosmetic_unique} types / {res.cosmetic_occ} total")
     print(f"Custom exclusions: {res.active_exclusion_rules} rules / {res.excluded_count} suppressed")
@@ -1209,9 +1435,9 @@ def run_report_cli():
     cfg = load_config()
     inst = cfg.get("instance", DEFAULT_INSTANCE)
     game = cfg.get("game") or parse_game_path(inst)
-    res = scan(inst, game)
+    res = scan(inst, game, recent_only=True)
     out = os.path.join(os.path.dirname(CONFIG_PATH),
-                       f"CP77_report_{dt.datetime.now():%Y%m%d_%H%M%S}.txt")
+                       f"CP77_Support_Report_{dt.datetime.now():%Y%m%d_%H%M%S}.txt")
     with open(out, "w", encoding="utf-8") as f:
         f.write(build_report(res, inst, game, include_raw=True))
     print(f"Report saved: {out} ({os.path.getsize(out)} bytes)")
@@ -1228,7 +1454,8 @@ def run_gui():
     GITHUB_URL = "https://github.com/dw1rf/CP77CrashScanner"
 
     cfg = load_config()
-    CURRENT_LANG = cfg.get("lang", "ru")
+    configured_lang = cfg.get("lang")
+    CURRENT_LANG = configured_lang if configured_lang in ("ru", "en") else detect_default_language()
     inst0 = cfg.get("instance", DEFAULT_INSTANCE)
     state = {"result": None,
              "instance": inst0,
@@ -1267,7 +1494,7 @@ def run_gui():
 
     inst_var = tk.StringVar(value=state["instance"])
     game_var = tk.StringVar(value=state["game"])
-    recent_var = tk.BooleanVar(value=False)
+    recent_var = tk.BooleanVar(value=True)
     hide_cos_var = tk.BooleanVar(value=True)
     incl_raw_var = tk.BooleanVar(value=True)
     status_var = tk.StringVar(value=T("ready"))
@@ -1381,9 +1608,10 @@ def run_gui():
         ctree.pack(side="left", fill="both", expand=True); cv.pack(side="right", fill="y")
 
         tab_err = ttk.Frame(nb, padding=6); nb.add(tab_err, text=T("tab_err"))
-        tree = ttk.Treeview(tab_err, columns=("sev", "cnt", "src", "text"), show="headings")
+        tree = ttk.Treeview(tab_err, columns=("sev", "rel", "cnt", "src", "text"), show="headings")
         for c, w, t in [("sev", 60, T("col_type")), ("cnt", 55, T("col_n")),
-                        ("src", 220, T("col_modsrc")), ("text", 760, T("col_msg"))]:
+                        ("rel", 190, T("col_relevance")), ("src", 210, T("col_modsrc")),
+                        ("text", 570, T("col_msg"))]:
             tree.heading(c, text=t); tree.column(c, width=w, anchor="w")
         tree.tag_configure("ERROR", foreground=ERRC); tree.tag_configure("WARN", foreground=WARNC)
         ev = ttk.Scrollbar(tab_err, orient="vertical", command=tree.yview); tree.configure(yscrollcommand=ev.set)
@@ -1400,9 +1628,10 @@ def run_gui():
 
         tab_dmp = ttk.Frame(nb, padding=6); nb.add(tab_dmp, text=T("tab_dmp"))
         dtree = ttk.Treeview(tab_dmp, columns=("type", "name", "when", "size"), show="headings")
-        for c, w, t in [("type", 70, T("col_type")), ("name", 360, T("col_name")),
-                        ("when", 160, T("col_when")), ("size", 100, T("col_size"))]:
+        for c, w, t in [("type", 120, T("col_type")), ("name", 340, T("col_name")),
+                         ("when", 160, T("col_when")), ("size", 100, T("col_size"))]:
             dtree.heading(c, text=t); dtree.column(c, width=w, anchor="w")
+        dtree.tag_configure("old", foreground="#8b8d91")
         dv = ttk.Scrollbar(tab_dmp, orient="vertical", command=dtree.yview); dtree.configure(yscrollcommand=dv.set)
         dtree.pack(side="left", fill="both", expand=True); dv.pack(side="right", fill="y")
 
@@ -1430,11 +1659,15 @@ def run_gui():
                                      T("hidden") if hide_cos else ""))
             sum_text.insert("end", T("sum_exclusions", res.active_exclusion_rules,
                                      res.excluded_count), "warn" if res.excluded_count else "ok")
+            sum_text.insert("end", T("sum_session", format_session_range(res)))
+            sum_text.insert("end", T("sum_old_logs", len(res.older_log_files)),
+                            "warn" if res.older_log_files else "ok")
             sum_text.insert("end", T("sum_lf"))
             sum_text.insert("end", f"{len(res.load_fails)}\n", "err" if res.load_fails else "ok")
             sum_text.insert("end", T("sum_conf"))
             sum_text.insert("end", f"{len(res.conflicts)}\n", "err" if res.conflicts else "ok")
-            sum_text.insert("end", T("sum_dmp", len(res.dumps)), "err" if res.dumps else "ok")
+            sum_text.insert("end", T("sum_dmp", len(res.session_dumps)),
+                            "err" if res.session_dumps else "ok")
 
             sum_text.insert("end", "\n" + T("sum_top") + "\n", "h")
             shown = 0
@@ -1450,12 +1683,17 @@ def run_gui():
 
             sum_text.insert("end", "\n\n" + T("sum_causes") + "\n", "h")
             if res.problems:
-                for src, pkey in res.problems:
-                    lbl = T(pkey + "_lbl") if (pkey + "_lbl") in TR else pkey
-                    sum_text.insert("end", f"\n  ⚠  {src}", "warn")
-                    sum_text.insert("end", f"  →  {lbl}\n")
-            else:
-                sum_text.insert("end", "\n" + T("sum_no_causes"), "ok")
+                for diag in res.problems:
+                    lbl = T(diag.key + "_lbl") if (diag.key + "_lbl") in TR else diag.key
+                    confidence = T("confidence_" + diag.confidence)
+                    relevance = T("relevance_" + diag.relevance)
+                    tag = "err" if diag.confidence == "high" else "warn"
+                    sum_text.insert("end", f"\n  •  {diag.source}", tag)
+                    sum_text.insert("end", f"  →  {lbl} [{confidence}; {relevance}]\n")
+            if res.diagnosis_state == "unclassified_crash":
+                sum_text.insert("end", "\n" + T("diag_unclassified_crash"), "warn")
+            elif res.diagnosis_state == "unclassified":
+                sum_text.insert("end", "\n" + T("diag_unclassified"), "warn")
 
             gtree.delete(*gtree.get_children())
             for src, a in sorted(res.by_source.items(), key=lambda kv: -(kv[1]["err_o"])):
@@ -1492,7 +1730,10 @@ def run_gui():
             for f in res.findings:
                 if hide_cos and f.cosmetic:
                     continue
-                iid = tree.insert("", "end", values=(f.severity, f.count, f.source, f.text[:500]), tags=(f.severity,))
+                relevance = (T("relevance_" + f.relevance) if f.confidence == "none"
+                             else f"{T('confidence_' + f.confidence)} / {T('relevance_' + f.relevance)}")
+                iid = tree.insert("", "end", values=(f.severity, relevance, f.count, f.source, f.text[:500]),
+                                  tags=(f.severity,))
                 paths[iid] = f.path
 
             comp_text.delete("1.0", "end")
@@ -1535,7 +1776,10 @@ def run_gui():
             dtree.delete(*dtree.get_children())
             for p, mt, size in res.dumps:
                 when = dt.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S")
-                iid = dtree.insert("", "end", values=("DUMP", os.path.basename(p), when, human_size(size)))
+                current = (p, mt, size) in res.session_dumps
+                iid = dtree.insert("", "end", values=("DUMP" if current else "DUMP (old)",
+                                   os.path.basename(p), when, human_size(size)),
+                                   tags=(() if current else ("old",)))
                 paths[iid] = p
             for p, mt in res.log_files:
                 when = dt.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S") if mt else "?"
@@ -1562,7 +1806,7 @@ def run_gui():
                         render(res)
                         status_var.set(T("scan_done", res.scanned_files, res.err_unique,
                                          res.err_occ, len(res.load_fails), res.excluded_count,
-                                         res.active_exclusion_rules, len(res.dumps)))
+                                         res.active_exclusion_rules, len(res.session_dumps)))
                         scan_btn.config(state="normal")
                     root.after(0, done)
                 except Exception as e:
@@ -1636,7 +1880,7 @@ def run_gui():
             if not res:
                 messagebox.showinfo(T("export_t"), T("exp_need_scan"))
                 return
-            fname = f"CP77_report_{dt.datetime.now():%Y%m%d_%H%M%S}.txt"
+            fname = f"CP77_Support_Report_{dt.datetime.now():%Y%m%d_%H%M%S}.txt"
             path = filedialog.asksaveasfilename(
                 title=T("exp_title"), defaultextension=".txt", initialfile=fname,
                 initialdir=os.path.dirname(CONFIG_PATH), filetypes=[("Text", "*.txt"), ("All", "*.*")])
@@ -1724,7 +1968,7 @@ def _auto_scan(state, inst_var, game_var, recent_var, holder, root, status_var):
             root.after(0, lambda: (holder["render"](res),
                                    status_var.set(T("scan_done", res.scanned_files, res.err_unique,
                                                     res.err_occ, len(res.load_fails), res.excluded_count,
-                                                    res.active_exclusion_rules, len(res.dumps)))))
+                                                    res.active_exclusion_rules, len(res.session_dumps)))))
         except Exception as e:
             root.after(0, lambda: status_var.set(T("scan_err", str(e))))
     threading.Thread(target=worker, daemon=True).start()

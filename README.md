@@ -6,8 +6,6 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 [![Latest release](https://img.shields.io/github/v/release/dw1rf/CP77CrashScanner?style=for-the-badge&color=9c42ef)](https://github.com/dw1rf/CP77CrashScanner/releases/latest)
 [![Download](https://img.shields.io/github/downloads/dw1rf/CP77CrashScanner/total?style=for-the-badge&color=6f2bd9)](https://github.com/dw1rf/CP77CrashScanner/releases)
 
-
-[![Latest Releases](https://github.com/dw1rf/CP77CrashScanner/releases/latest)
 > Also available on **[Nexus Mods](https://www.nexusmods.com/cyberpunk2077/mods/30924)**
 
 ---
@@ -15,16 +13,17 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 ## Features
 
 - **Auto-scan** on startup if MO2 instance is configured
-- **Crash cause detection** — shows the specific mod(s) responsible, not generic hints
+- **Session-aware diagnosis** *(new in 1.6)* — the latest game session is selected by default; older files and timestamped log blocks stay out of the main diagnosis
+- **Confidence-aware crash diagnosis** *(new in 1.6)* — separates a log's `ERROR` level from its actual CTD relevance (`high`, `medium`, or `low`)
 - **r6 conflict detection** *(new in 1.2)* — parses `redscript`, `TweakXL` and `ArchiveXL` logs to name mods that overwrite each other's methods/records or reference missing code
 - **Framework version check** — RED4ext, CET, ArchiveXL, TweakXL, Codeware, redscript
 - **Framework dependency chains** — finds the first missing, failed or incompatible link instead of checking each framework in isolation
 - **Custom exclusions** *(new in 1.5)* — suppress noisy diagnostics by mod/source or by a literal word/phrase
 - **Failed-to-load tab** — ready-to-share list of incompatible mods
 - **Vortex support** — auto-detected, no extra configuration needed
-- **Bilingual UI** — Russian / English, switchable at runtime
+- **Bilingual UI** — Russian / English, switchable at runtime; first launch follows a Russian system locale and otherwise falls back to English
 - **Purge logs** *(new in 1.3)* — one-click delete of all scanned log files and crash dumps, with a yes/no confirmation. Clear stale logs, launch the game to reproduce the crash, then scan a clean set
-- **One-file export** — full report with raw logs in a single `.txt`
+- **One-file Support Report** — session range, confidence-ranked diagnosis, dump manifest, and relevant raw logs in one sendable `.txt`
 - **Copy-paste** — all result panels are selectable and copyable
 
 ## Supported mod managers
@@ -51,17 +50,17 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 2. Run it — auto-scans if your MO2 instance path is already saved
 3. Set **MO2 instance** folder and/or **Game** folder
 4. Press **SCAN**
-5. Review the tabs; use **REPORT TO 1 FILE** to export for sharing
+5. Keep **Latest session only (recommended)** enabled, review the tabs, then use **SUPPORT REPORT (1 FILE)** when asking for help
 
 ## Tabs
 
 | Tab | What it shows |
 |-----|---------------|
-| Summary | Error counts, top mods by errors, crash causes with mod names |
+| Summary | Active session, error counts, and confidence-ranked crash diagnosis |
 | By Mod | All mods grouped with expandable error list |
 | Didn't Load ⚠ | Mods that failed to load or compile |
 | r6 conflicts ⚔ | Mods overwriting the same method/record + redscript compile errors |
-| All Errors | Every unique error/warning, deduped |
+| All Errors | Every unique error/warning, deduped, with separate CTD relevance |
 | Compatibility | Framework versions, Vortex status, scanned paths |
 | Dumps & Logs | Crash dumps and log files with timestamps |
 
@@ -75,7 +74,9 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 | `missing class/method` | Missing framework dependency |
 | `engine crash (access violation)` | Archive conflict or corrupted `.archive` |
 | `missing .archive` | Incomplete mod installation |
-| `NCA: state machine error` | Night City Allies crash in specific locations |
+| `NCA: state machine error` | Low-confidence context by default; medium-confidence possible cause only when close to a current crash dump |
+
+If the latest session contains a crash signal or dump but no known signature, the scanner reports **UNCLASSIFIED CTD**. It no longer treats "no known signature" as proof that the game is healthy.
 
 ## Mod conflict detection in r6 *(new in 1.2)*
 
@@ -141,8 +142,8 @@ build_windows.bat
 ```
 
 Output: `dist\CP77CrashScanner\CP77CrashScanner.exe` (onedir build)
-Binary ZIP: `dist\CP77CrashScanner_v1.5.0.zip`
-Corresponding source ZIP: `dist\CP77CrashScanner_v1.5.0_source.zip`
+Binary ZIP: `dist\CP77CrashScanner_v1.6.0.zip`
+Corresponding source ZIP: `dist\CP77CrashScanner_v1.6.0_source.zip`
 
 **Note on antivirus detections:** Release builds use Nuitka standalone mode — no PyInstaller bootloader, UPX compression, obfuscation, or self-extracting installer. The binary package includes SHA-256 checksums, and the release includes a separate corresponding-source ZIP for review. An unsigned executable can still trigger reputation-based warnings; report any false positive to the relevant antivirus vendor.
 
