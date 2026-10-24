@@ -581,11 +581,45 @@ def _win_file_version(path):
         p, n = ctypes.c_void_p(), ctypes.c_uint()
         if not ver.VerQueryValueW(buf, "\\", ctypes.byref(p), ctypes.byref(n)):
             return None
-        nums = ctypes.cast(p, ctypes.POINTER(ctypes.c_ushort * 8)).contents
-        a, b, c = nums[1], nums[0], nums[3]
+        # VS_FIXEDFILEINFO starts with signature and structure version DWORDs.
+        # FileVersionMS/LS are the third and fourth DWORDs, not the first words.
+        if not p.value or n.value < 52:
+            return None
+        nums = ctypes.cast(p, ctypes.POINTER(ctypes.c_uint32 * 13)).contents
+        if nums[0] != 0xFEEF04BD:
+            return None
+        a, b, c = nums[2] >> 16, nums[2] & 0xFFFF, nums[3] >> 16
+        if not (nums[2] or nums[3]):
+            return None
         return f"{a}.{b}.{c}"
     except Exception:
         return None
+
+
+FRAMEWORK_BINARIES = {
+    "RED4ext": ("red4ext/red4ext.dll",),
+    "Cyber Engine Tweaks": ("bin/x64/plugins/cyber_engine_tweaks.asi",),
+    "ArchiveXL": ("red4ext/plugins/ArchiveXL/ArchiveXL.dll",),
+    "TweakXL": ("red4ext/plugins/TweakXL/TweakXL.dll",),
+    "Codeware": ("red4ext/plugins/Codeware/Codeware.dll",),
+    "redscript": ("engine/tools/scc.exe",),
+}
+
+
+def detect_binary_versions(game_dir, versions):
+    """Fill missing versions from installed binaries without executing them."""
+    if not game_dir:
+        return
+    for name, candidates in FRAMEWORK_BINARIES.items():
+        if name in versions:
+            continue
+        for relative_path in candidates:
+            path = os.path.join(game_dir, *relative_path.split("/"))
+            if os.path.isfile(path):
+                version = _win_file_version(path)
+                if version:
+                    versions[name] = version
+                    break
 
 
 def detect_vortex_dir():
@@ -601,6 +635,7 @@ def collect_scan_dirs(instance_dir, game_dir):
                  os.path.join(instance_dir, "crashDumps")]
     if game_dir:
         dirs += [os.path.join(game_dir, "red4ext", "logs"),
+                 os.path.join(game_dir, "red4ext", "plugins"),
                  os.path.join(game_dir, "r6", "logs"),
                  os.path.join(game_dir, "bin", "x64", "plugins"),
                  os.path.join(game_dir, "bin", "x64")]
@@ -663,6 +698,17 @@ def read_tail(path, max_bytes=MAX_READ_BYTES):
             return f.read().decode("utf-8", errors="replace")
     except Exception as e:
         return f"<read error: {e}>"
+
+
+def read_version_content(path, tail):
+    """Include startup metadata when a long log's beginning was truncated."""
+    try:
+        if os.path.getsize(path) > MAX_READ_BYTES:
+            with open(path, "rb") as f:
+                return f.read(MAX_READ_BYTES).decode("utf-8", errors="replace") + "\n" + tail
+    except OSError:
+        pass
+    return tail
 
 
 def read_capped(path, cap):
@@ -1123,14 +1169,16 @@ def scan(instance_dir, game_dir, recent_only=False):
         res.scanned_files += 1
         content = read_tail(path)
         diagnostic_content = content_for_session(content, session_cutoff if recent_only else None)
+        version_content = content_for_session(read_version_content(path, content),
+                                              session_cutoff if recent_only else None)
         low_path = path.replace("\\", "/").lower()
         is_redscript_log = "redscript" in os.path.basename(path).lower() or "/r6/logs/" in low_path
         for name, pat in FRAMEWORK_LOAD_PATTERNS.items():
-            if pat.search(diagnostic_content):
+            if pat.search(version_content):
                 loaded_frameworks.add(name)
         for name, pat in VERSION_PATTERNS:
             if name not in res.versions:
-                m = pat.search(diagnostic_content)
+                m = pat.search(version_content)
                 if m:
                     res.versions[name] = m.group(1)
         for c in extract_conflicts(path, diagnostic_content):
@@ -1206,16 +1254,7 @@ def scan(instance_dir, game_dir, recent_only=False):
                     if previous is None or rank[confidence] > rank[previous.confidence]:
                         problem_map[diag_key] = diag
 
-    if "redscript" not in res.versions and game_dir:
-        for rspath in [
-            os.path.join(game_dir, "engine", "tools", "scc.exe"),
-            os.path.join(game_dir, "tools", "redmod", "bin", "scc.exe"),
-        ]:
-            if os.path.isfile(rspath):
-                ver = _win_file_version(rspath)
-                if ver:
-                    res.versions["redscript"] = ver
-                    break
+    detect_binary_versions(game_dir, res.versions)
 
     findings = list(raw.values())
     findings.sort(key=lambda f: (not f.is_load_fail, f.severity != "ERROR", -f.count))
@@ -1456,6 +1495,61 @@ def run_report_cli():
 
 
 # --- GUI ----------------------------------------------------------------------
+class FileTreeRows:
+    """Keep file links and sortable metadata local to one Treeview."""
+
+    def __init__(self, tree, open_path, sortable=False):
+        self.tree = tree
+        self.open_path = open_path
+        self.paths = {}
+        self.sizes = {}
+        self.sort_column = None
+        self.descending = False
+        self.headings = {}
+        tree.bind("<Double-1>", self.on_double_click)
+        if sortable:
+            for column in ("name", "size"):
+                self.headings[column] = tree.heading(column, "text")
+                tree.heading(column, command=lambda c=column: self.sort(c))
+
+    def clear(self):
+        self.paths.clear()
+        self.sizes.clear()
+
+    def add(self, iid, path, size=None):
+        self.paths[iid] = path
+        self.sizes[iid] = size
+
+    def on_double_click(self, event):
+        if self.tree.identify_region(event.x, event.y) not in ("tree", "cell"):
+            return
+        iid = self.tree.identify_row(event.y)
+        if iid in self.paths:
+            self.open_path(self.paths[iid])
+
+    def sort(self, column):
+        self.descending = not self.descending if self.sort_column == column else False
+        self.sort_column = column
+        self.apply_sort()
+
+    def apply_sort(self):
+        if self.sort_column is None:
+            return
+        rows = list(self.tree.get_children())
+        if self.sort_column == "size":
+            known = [iid for iid in rows if self.sizes.get(iid) is not None]
+            unknown = [iid for iid in rows if self.sizes.get(iid) is None]
+            rows = sorted(known, key=self.sizes.get, reverse=self.descending) + unknown
+        else:
+            rows.sort(key=lambda iid: self.tree.set(iid, "name").casefold(),
+                      reverse=self.descending)
+        for index, iid in enumerate(rows):
+            self.tree.move(iid, "", index)
+        for column, title in self.headings.items():
+            arrow = (" ▼" if self.descending else " ▲") if column == self.sort_column else ""
+            self.tree.heading(column, text=title + arrow)
+
+
 def run_gui():
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
@@ -1526,7 +1620,6 @@ def run_gui():
     def build_ui():
         for w in root.winfo_children():
             w.destroy()
-        paths = {}
 
         top = ttk.Frame(root, padding=10); top.pack(fill="x")
 
@@ -1656,12 +1749,13 @@ def run_gui():
             except Exception as e:
                 messagebox.showerror("Error", str(e))
 
-        for tv in (tree, lftree, dtree, gtree, ctree):
-            tv.bind("<Double-1>", lambda e, t=tv: (t.focus() in paths) and open_path(paths[t.focus()]))
+        file_rows = {tv: FileTreeRows(tv, open_path, sortable=tv is dtree)
+                     for tv in (tree, lftree, dtree, gtree, ctree)}
 
         def render(res):
             hide_cos = hide_cos_var.get()
-            paths.clear()
+            for rows in file_rows.values():
+                rows.clear()
 
             sum_text.delete("1.0", "end")
             sum_text.insert("end", T("sum_h") + "\n", "h")
@@ -1722,14 +1816,14 @@ def run_gui():
                         continue
                     child = gtree.insert(parent, "end", text=f"   ×{f.count}  {f.text[:150]}",
                                          values=("", ""), tags=(f.severity,))
-                    paths[child] = f.path
+                    file_rows[gtree].add(child, f.path)
 
             lftree.delete(*lftree.get_children())
             if not res.load_fails:
                 lftree.insert("", "end", values=("—", "", T("lf_none")))
             for f in res.load_fails:
                 iid = lftree.insert("", "end", values=(f.source, f.count, f.text[:500]), tags=("LF",))
-                paths[iid] = f.path
+                file_rows[lftree].add(iid, f.path)
 
             ctree.delete(*ctree.get_children())
             if not res.conflicts:
@@ -1739,7 +1833,7 @@ def run_gui():
                                    values=(c.mod, c.system, T("conf_kind_" + c.kind),
                                            c.target, c.message[:500]),
                                    tags=(c.kind,))
-                paths[iid] = c.path
+                file_rows[ctree].add(iid, c.path)
 
             tree.delete(*tree.get_children())
             for f in res.findings:
@@ -1749,7 +1843,7 @@ def run_gui():
                              else f"{T('confidence_' + f.confidence)} / {T('relevance_' + f.relevance)}")
                 iid = tree.insert("", "end", values=(f.severity, relevance, f.count, f.source, f.text[:500]),
                                   tags=(f.severity,))
-                paths[iid] = f.path
+                file_rows[tree].add(iid, f.path)
 
             comp_text.delete("1.0", "end")
             comp_text.insert("end", T("comp_h") + "\n", "h")
@@ -1795,15 +1889,18 @@ def run_gui():
                 iid = dtree.insert("", "end", values=("DUMP" if current else "DUMP (old)",
                                    os.path.basename(p), when, human_size(size)),
                                    tags=(() if current else ("old",)))
-                paths[iid] = p
+                file_rows[dtree].add(iid, p, size)
             for p, mt in res.log_files:
                 when = dt.datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S") if mt else "?"
                 try:
-                    size = human_size(os.path.getsize(p))
+                    raw_size = os.path.getsize(p)
+                    size = human_size(raw_size)
                 except OSError:
+                    raw_size = None
                     size = "?"
                 iid = dtree.insert("", "end", values=("LOG", os.path.basename(p), when, size))
-                paths[iid] = p
+                file_rows[dtree].add(iid, p, raw_size)
+            file_rows[dtree].apply_sort()
 
         holder["render"] = render
 
