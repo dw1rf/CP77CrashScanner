@@ -11,7 +11,7 @@ Self-test: python cp77_crash_scanner.py --scan
 Report: python cp77_crash_scanner.py --report
 """
 
-__version__ = "1.6.0"
+__version__ = "1.7.2"
 
 import os
 import re
@@ -627,6 +627,27 @@ def detect_vortex_dir():
     return cp_dir if os.path.isdir(cp_dir) else None
 
 
+def detect_report_queue_dirs():
+    """Discover only Cyberpunk reports in the shared REDengine crash queue."""
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if not local_appdata:
+        return []
+    queue = os.path.join(local_appdata, "REDEngine", "ReportQueue")
+    dirs = []
+    try:
+        with os.scandir(queue) as entries:
+            for entry in entries:
+                if re.match(r"^Cyberpunk2077(?:-|$)", entry.name, re.IGNORECASE):
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            dirs.append(entry.path)
+                    except OSError:
+                        continue
+    except OSError:
+        pass
+    return sorted(dirs)
+
+
 def collect_scan_dirs(instance_dir, game_dir):
     dirs = []
     if instance_dir:
@@ -642,6 +663,7 @@ def collect_scan_dirs(instance_dir, game_dir):
     vortex_dir = detect_vortex_dir()
     if vortex_dir:
         dirs.append(vortex_dir)
+    dirs.extend(detect_report_queue_dirs())
     return [d for d in dirs if os.path.isdir(d)]
 
 

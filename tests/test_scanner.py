@@ -10,7 +10,19 @@ from unittest import mock
 import cp77_crash_scanner as scanner
 
 
-class LogClassificationRegressionTests(unittest.TestCase):
+class IsolatedScanTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(scanner, "detect_report_queue_dirs", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class LogClassificationRegressionTests(IsolatedScanTests):
+    def test_game_version_2_5_is_read_from_log_without_version_gate(self):
+        result = self.scan_log(Path("red4ext/logs/red4ext.log"),
+                               "[info] Product version: 2.5\n")
+        self.assertEqual("2.5", result.versions["Game"])
+
     def scan_log(self, relative_path, content, config=None):
         with tempfile.TemporaryDirectory() as tmp:
             game_dir = Path(tmp)
@@ -114,7 +126,7 @@ this method replacement overwrites a previous annotation targeting the same meth
         self.assertEqual("ERROR", result.findings[0].severity)
 
 
-class ExclusionTests(unittest.TestCase):
+class ExclusionTests(IsolatedScanTests):
     def scan_log(self, relative_path, content, config=None):
         with tempfile.TemporaryDirectory() as tmp:
             game_dir = Path(tmp)
@@ -227,7 +239,7 @@ this method replacement overwrites a previous annotation targeting the same meth
                 self.assertEqual(config, scanner.load_config())
 
 
-class SessionAndConfidenceTests(unittest.TestCase):
+class SessionAndConfidenceTests(IsolatedScanTests):
     def scan_game(self, game_dir, recent_only=True):
         with mock.patch.object(scanner, "detect_vortex_dir", return_value=None), \
                 mock.patch.object(scanner, "load_config", return_value={}):

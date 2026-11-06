@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.7.2 - 2026-11-06
+
+### Added
+
+- Automatic discovery of Cyberpunk2077 and Cyberpunk2077-* report folders in `%LOCALAPPDATA%\REDEngine\ReportQueue`, without MO2, Vortex, or a configured game folder.
+- ReportQueue `.log`/`.txt` logs and `.dmp` inventory in session selection and the one-file Support Report.
+- Purge support for these logs and dumps; other games' report folders are excluded.
+- Regression coverage for ReportQueue discovery, latest-session selection, purge boundaries, and game version 2.5 parsing.
+
+### Compatibility
+
+- No game-patch gate is imposed by the scanner. Parsing a 2.5 version string is tested; in-game compatibility with patch 2.5 has not been verified.
+- Binary dump contents are not decoded. Missing or inaccessible ReportQueue folders are skipped.
+- Source packages now include all regression test modules.
+
 ## 1.6.0 - 2026-08-27
 
 ### Added

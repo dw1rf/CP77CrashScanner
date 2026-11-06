@@ -64,7 +64,7 @@ if errorlevel 1 exit /b 1
 echo [5/5] Creating corresponding source ZIP...
 if exist dist\CP77CrashScanner_v%VERSION%_source.zip del /q dist\CP77CrashScanner_v%VERSION%_source.zip
 tar.exe -a -c -f "dist\CP77CrashScanner_v%VERSION%_source.zip" ^
-  cp77_crash_scanner.py tests\test_scanner.py requirements.txt version.txt ^
+  cp77_crash_scanner.py tests\test_scanner.py tests\test_ui_and_versions.py tests\test_report_queue.py requirements.txt version.txt ^
   file_version_info.txt CP77CrashScanner.spec build_windows.bat build_nuitka.bat ^
   README.md README_RU.md CHANGELOG.md LICENSE ^
   assets\app_icon.png assets\app_icon.ico .github\workflows\build.yml

@@ -84,6 +84,11 @@ class FileTreeTests(unittest.TestCase):
 
 
 class VersionDetectionTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(scanner, "detect_report_queue_dirs", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def scan(self, game_dir):
         with mock.patch.object(scanner, "detect_vortex_dir", return_value=None), \
                 mock.patch.object(scanner, "load_config", return_value={}):

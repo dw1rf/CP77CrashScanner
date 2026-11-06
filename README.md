@@ -12,6 +12,8 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 
 ## Features
 
+- **REDengine crash reports** *(new in 1.7.2)* — automatically scans `.log`/`.txt` logs and lists `.dmp` files from `Cyberpunk2077` / `Cyberpunk2077-*` folders in `%LOCALAPPDATA%\REDEngine\ReportQueue`, including without MO2 or Vortex. These files participate in session filtering, Support Report export, and confirmed log purging; other games are excluded. Binary dump contents are not decoded.
+
 - **Auto-scan** on startup if MO2 instance is configured
 - **Session-aware diagnosis** *(new in 1.6)* — the latest game session is selected by default; older files and timestamped log blocks stay out of the main diagnosis
 - **Confidence-aware crash diagnosis** *(new in 1.6)* — separates a log's `ERROR` level from its actual CTD relevance (`high`, `medium`, or `low`)
@@ -44,12 +46,14 @@ Scans log files from **Mod Organizer 2** and **Vortex**, classifies errors, dete
 - Cyberpunk 2077 (any version with RED4ext recommended)
 - No Python required — single portable `.exe`
 
+The scanner has no game-patch gate. Version-string parsing for 2.5 is covered by regression tests, but in-game compatibility with patch 2.5 has not been verified. Framework reference versions are configurable and are not a patch compatibility guarantee.
+
 ## Usage
 
 1. Download `CP77 Crash Scanner.exe` from [Releases](https://github.com/dw1rf/CP77CrashScanner/releases)
 2. Run it — auto-scans if your MO2 instance path is already saved
 3. Set **MO2 instance** folder and/or **Game** folder
-4. Press **SCAN**
+4. Press **SCAN** (ReportQueue discovery also works with both folder fields empty)
 5. Keep **Latest session only (recommended)** enabled, review the tabs, then use **SUPPORT REPORT (1 FILE)** when asking for help
 
 ## Tabs
